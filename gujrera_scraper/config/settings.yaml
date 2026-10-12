@@ -1,0 +1,51 @@
+﻿# Runtime settings for the GujRERA pipeline. Paths are relative to the gujrera_scraper/ folder.
+
+database_path: data/gujrera.db
+documents_dir: data/documents          # downloaded PDFs (analytics-critical only)
+document_text_dir: data/document_text  # extracted text, one .txt per document
+exports_dir: exports
+
+network:
+  rate_per_sec: 2.5        # global request rate across all workers (be polite to a government server)
+  workers: 6               # concurrent in-flight requests (slow endpoints otherwise stall the crawl)
+  timeout_sec: 120
+  max_retries: 4           # per request, exponential backoff 1,2,4,8s (+ Retry-After when sent)
+  max_task_attempts: 3     # per queue task across resumes before it lands in the failure queue
+                           # (lost connectivity never counts as an attempt: the crawl pauses instead)
+
+target_project_types:      # list endpoints to crawl (see scraper/endpoints.py)
+  - list_residential
+  - list_mixed
+
+priority:
+  # Projects in these districts are crawled first, limited to the endpoints the analysis needs; their remaining
+  # endpoints and all other districts follow in the same run.
+  districts: [Ahmedabad]
+  endpoints: [core, details, applications, qpr_details, progress_report, qpr_progress, qpr_quarters, qe_filing,
+              block_chart, unit_summary, form_two, location]
+
+incremental:
+  # On incremental runs these endpoints are re-fetched for every known project;
+  # the remaining (slow-changing) endpoints are re-fetched only for new projects, projects whose
+  # list row changed, or projects not fully refreshed for `full_refresh_days`.
+  volatile_endpoints: [core, applications, qpr_details, progress_report, qpr_progress, qpr_quarters,
+                       qe_filing, block_chart, unit_summary, form_five]
+  full_refresh_days: 90
+
+documents:
+  # Only these document types are downloaded and parsed (user decision: analytics-critical only).
+  # Every other discovered document is recorded with metadata + download URL only.
+  download_types: [registration_certificate, extension_certificate, qe_form_four, complaint_order,
+                   suo_motu_order, appellate_order]
+  ocr_command: tesseract   # used only if found on PATH; otherwise scanned PDFs are flagged ocr_needed
+
+privacy:
+  # Salt for hashing complainant names and promoter PAN. Override with env GUJRERA_HASH_SALT.
+  hash_salt: change-me-gujrera-salt
+
+analysis:
+  stalled_min_delta_pp: 2.0          # progress gain (percentage points) over the last 3 reported quarters
+  stalled_lookback_quarters: 3
+  stalled_no_qpr_months: 9           # no QPR filed for this long while not completed => stalled
+  high_unsold_pct: 50                # used for high-risk flagging
+  low_progress_pct: 25

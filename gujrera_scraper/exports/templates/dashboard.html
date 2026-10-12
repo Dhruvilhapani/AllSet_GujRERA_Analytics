@@ -1,0 +1,392 @@
+<title>__DISTRICT__ Builder Intelligence</title>
+<style>
+/* Layout: one column of sections under a sticky tab bar; each section is a responsive grid of chart cards. */
+:root {
+  --page: #f6f6f3; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10); --accent: #1c5cab;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+  --good: #0ca30c; --warn: #fab219; --serious: #ec835a; --critical: #d03b3b; --none: #b9b8b0;
+  --r250: #86b6ef; --r350: #5598e7; --r450: #2a78d6; --r550: #1c5cab; --r650: #104281;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --accent: #86b6ef;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --none: #5b5a55;
+  --r250: #184f95; --r350: #1c5cab; --r450: #2a78d6; --r550: #3987e5; --r650: #6da7ec; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --accent: #86b6ef;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --none: #5b5a55;
+  --r250: #184f95; --r350: #1c5cab; --r450: #2a78d6; --r550: #3987e5; --r650: #6da7ec; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { background: var(--page); color: var(--ink); font-family: var(--font); font-size: 14px; line-height: 1.45; }
+.wrap { max-width: 1280px; margin: 0 auto; padding-inline: 16px; padding-block: 20px 48px; }
+header.top { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: flex-end; justify-content: space-between; }
+h1 { font-size: 26px; line-height: 1.15; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+.sub { color: var(--ink-2); margin: 4px 0 0; max-width: 72ch; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px;
+  border: 1px solid var(--ring); background: var(--surface); color: var(--ink-2); }
+.chip b { color: var(--ink); font-weight: 600; }
+.chip.partial::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
+.chip.full::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
+nav.tabs { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--page);
+  display: flex; gap: 4px; overflow-x: auto; padding-block: 12px 8px; margin-top: 12px; border-bottom: 1px solid var(--grid); }
+nav.tabs button { font: inherit; border: 0; background: none; color: var(--ink-2); padding: 7px 12px; border-radius: 8px;
+  cursor: pointer; white-space: nowrap; }
+nav.tabs button[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--ring); font-weight: 600; }
+nav.tabs button:focus-visible, .card button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+section.tab { display: grid; gap: 16px; margin-top: 16px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.kpi { background: var(--surface); border-radius: 12px; box-shadow: 0 0 0 1px var(--ring); padding: 14px 16px; }
+.kpi .l { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.kpi .v { font-size: 26px; font-weight: 650; margin-top: 4px; }
+.kpi .n { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); gap: 16px; }
+.card { background: var(--surface); border-radius: 12px; box-shadow: 0 0 0 1px var(--ring); padding: 16px; min-width: 0; }
+.card h3 { margin: 0; font-size: 15px; }
+.card .def { margin: 2px 0 10px; color: var(--ink-2); font-size: 12px; }
+.card .head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.card .tbtn { font: inherit; font-size: 12px; border: 1px solid var(--ring); background: none; color: var(--ink-2);
+  border-radius: 6px; padding: 3px 8px; cursor: pointer; flex: none; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart text { fill: var(--muted); font-size: 11px; font-family: var(--font); }
+.chart text.lbl { fill: var(--ink-2); font-size: 12px; }
+.chart text.val { fill: var(--ink); font-size: 11px; font-variant-numeric: tabular-nums; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 8px; font-size: 12px; color: var(--ink-2); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.tblwrap { overflow-x: auto; max-height: 520px; overflow-y: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { position: sticky; top: 0; background: var(--surface); color: var(--ink-2); font-weight: 600; cursor: pointer; user-select: none; }
+td.num, th.num { text-align: right; }
+td.wrap { white-space: normal; min-width: 240px; }
+.na { color: var(--muted); }
+.tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+.tools input { font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--axis); background: var(--page);
+  color: var(--ink); min-width: 0; width: min(320px, 100%); }
+.tools .count { color: var(--muted); font-size: 12px; }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; border: 1px solid var(--ring); }
+.pill::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; background: var(--c, var(--none)); }
+#tip { position: fixed; pointer-events: none; z-index: 20; background: var(--surface); color: var(--ink); border-radius: 8px;
+  box-shadow: 0 0 0 1px var(--ring), 0 6px 20px rgba(0,0,0,.12); padding: 8px 10px; font-size: 12px; max-width: 280px; display: none; }
+#tip b { display: block; margin-bottom: 2px; }
+.note { color: var(--ink-2); font-size: 12px; }
+.note li { margin-block: 2px; }
+.dq { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px 16px; font-size: 13px; }
+.dq div { display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--grid); padding-block: 4px; }
+.dq span:last-child { font-variant-numeric: tabular-nums; font-weight: 600; }
+@media (prefers-reduced-motion: no-preference) { .chart rect.m, .chart path.m { transition: opacity .15s; } }
+.chart .m:hover { opacity: .8; }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>__DISTRICT__ Builder Intelligence</h1>
+      <p class="sub">Residential and mixed-use projects registered with GujRERA. Every figure is computed from GujRERA's
+        public project records. “—” means the source does not publish the value; it is never counted as zero.</p>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap" id="chips"></div>
+  </header>
+  <nav class="tabs" role="tablist" id="tabs"></nav>
+  <main id="main"></main>
+</div>
+<div id="tip" role="tooltip"></div>
+
+<script>
+const DATA = /*__DATA__*/null;
+const $ = (s, el = document) => el.querySelector(s);
+const NS = "http://www.w3.org/2000/svg";
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const nf = new Intl.NumberFormat("en-IN");
+const fmt = v => v === null || v === undefined || v === "" ? "—" : (typeof v === "number" ? nf.format(Math.round(v * 10) / 10) : String(v));
+const pct = v => v === null || v === undefined ? "—" : `${(Math.round(v * 10) / 10).toFixed(1)}%`;
+const rupees = v => { if (v == null) return "—"; if (v >= 1e7) return `₹${(v / 1e7).toFixed(2)} cr`; if (v >= 1e5) return `₹${(v / 1e5).toFixed(2)} lakh`; return `₹${nf.format(v)}`; };
+function el(tag, attrs = {}, parent) { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (parent) parent.appendChild(e); return e; }
+function h(tag, attrs = {}, html = "") { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (html) e.innerHTML = html; return e; }
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ---------------------------------------------------------------- tooltip
+const tip = $("#tip");
+function showTip(ev, html) { tip.innerHTML = html; tip.style.display = "block"; moveTip(ev); }
+function moveTip(ev) { const x = Math.min(ev.clientX + 14, innerWidth - tip.offsetWidth - 8); const y = Math.min(ev.clientY + 14, innerHeight - tip.offsetHeight - 8); tip.style.left = x + "px"; tip.style.top = y + "px"; }
+function hideTip() { tip.style.display = "none"; }
+function bindTip(node, html) { node.addEventListener("mousemove", e => showTip(e, html)); node.addEventListener("mouseleave", hideTip);
+  node.setAttribute("tabindex", "0"); node.addEventListener("focus", () => { const r = node.getBoundingClientRect(); showTip({ clientX: r.right, clientY: r.top }, html); }); node.addEventListener("blur", hideTip); }
+
+// ---------------------------------------------------------------- card with chart/table toggle
+function card(parent, title, def, draw, table) {
+  const c = h("div", { class: "card" });
+  const head = h("div", { class: "head" }, `<div><h3>${esc(title)}</h3>${def ? `<p class="def">${def}</p>` : ""}</div>`);
+  const btn = h("button", { class: "tbtn", type: "button" }, "Table");
+  head.appendChild(btn); c.appendChild(head);
+  const chart = h("div", { class: "chart" }); const tbl = h("div", { class: "tblwrap" }); tbl.hidden = true;
+  c.append(chart, tbl); parent.appendChild(c);
+  draw(chart);
+  if (table) { tbl.appendChild(tableEl(table.cols, table.rows, table.fmts)); btn.onclick = () => { const t = !tbl.hidden; tbl.hidden = t; chart.hidden = !t; btn.textContent = t ? "Table" : "Chart"; }; }
+  else btn.remove();
+  return c;
+}
+function tableEl(cols, rows, fmts = {}) {
+  const t = h("table"); const thead = h("thead"); const tr = h("tr");
+  cols.forEach((c, i) => { const th = h("th", { class: typeof rows[0]?.[i] === "number" ? "num" : "" }, esc(c)); tr.appendChild(th); });
+  thead.appendChild(tr); t.appendChild(thead); const tb = h("tbody");
+  for (const r of rows) { const row = h("tr"); r.forEach((v, i) => { const f = fmts[i]; const td = h("td", { class: typeof v === "number" ? "num" : (String(v ?? "").length > 60 ? "wrap" : "") }); td.innerHTML = v === null || v === undefined ? '<span class="na">—</span>' : esc(f ? f(v) : (typeof v === "number" ? fmt(v) : v)); row.appendChild(td); }); tb.appendChild(row); }
+  t.appendChild(tb); return t;
+}
+function legend(parent, items) { const l = h("div", { class: "legend" }); for (const [name, color] of items) l.appendChild(h("span", {}, `<i style="background:${color}"></i>${esc(name)}`)); parent.appendChild(l); }
+// 4 gridline intervals on a "nice" step (1, 2, 2.5, 5 × 10^k); integer steps when values are counts
+function niceStep(v, n = 4) { const raw = Math.max(v, 1e-9) / n; const p = Math.pow(10, Math.floor(Math.log10(raw)));
+  for (const m of [1, 2, 2.5, 5, 10]) { const s = m * p; if (s >= raw && (v < 4 || Number.isInteger(s))) return s; } return 10 * p; }
+function niceMax(v) { if (v <= 0) return 4; const s = niceStep(v); return s * 4; }
+function ticks(max, n = 4) { return Array.from({ length: n + 1 }, (_, i) => max * i / n); }
+const trunc = (s, n) => (s = String(s ?? "—")).length > n ? s.slice(0, n - 1) + "…" : s;
+
+// ---------------------------------------------------------------- horizontal bars (one series, or stacked two)
+function hbar(div, rows, { series = [["Value", "--s1"]], valueFmt = fmt, labelW = 210, extra } = {}) {
+  if (!rows.length) { div.innerHTML = '<p class="note">No data yet.</p>'; return; }
+  if (series.length > 1) legend(div, series.map(([n, v]) => [n, css(v)]));
+  const W = 640, rowH = 26, top = 18, H = top + rows.length * rowH + 6, x0 = labelW, x1 = W - 60;
+  const tot = r => series.reduce((s, _, i) => s + (r.values[i] || 0), 0);
+  const max = niceMax(Math.max(...rows.map(tot)));
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" }, div);
+  for (const t of ticks(max)) { const x = x0 + (x1 - x0) * t / max; el("line", { x1: x, x2: x, y1: top - 4, y2: H - 4, stroke: css("--grid") }, svg); el("text", { x, y: 10, "text-anchor": "middle" }, svg).textContent = valueFmt(t); }
+  rows.forEach((r, i) => {
+    const y = top + i * rowH + 4; el("text", { x: x0 - 8, y: y + 13, "text-anchor": "end", class: "lbl" }, svg).textContent = trunc(r.label, 30);
+    let acc = 0;
+    series.forEach(([name, v], si) => { const val = r.values[si] || 0; if (!val) return; const w = Math.max((x1 - x0) * val / max - 2, 1);
+      const rect = el("rect", { x: x0 + (x1 - x0) * acc / max, y, width: w, height: rowH - 10, rx: 4, fill: css(v), class: "m" }, svg); acc += val;
+      bindTip(rect, `<b>${esc(r.label)}</b>${esc(name)}: ${valueFmt(val)}${r.tip ? "<br>" + r.tip : ""}`); });
+    el("text", { x: x0 + (x1 - x0) * acc / max + 6, y: y + 12, class: "val" }, svg).textContent = r.show ?? valueFmt(acc);
+  });
+}
+
+// ---------------------------------------------------------------- vertical columns (stacked) + lines
+function columns(div, xs, series, { stacked = true, valueFmt = fmt } = {}) {
+  legend(div, series.map(s => [s.name, css(s.color)]));
+  const W = 640, H = 260, l = 44, r = 10, t = 10, b = 26, n = xs.length, bw = (W - l - r) / n;
+  const tot = i => stacked ? series.reduce((s, se) => s + (se.values[i] || 0), 0) : Math.max(...series.map(se => se.values[i] || 0));
+  const max = niceMax(Math.max(1, ...xs.map((_, i) => tot(i)))); const Y = v => H - b - (H - t - b) * v / max;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" }, div);
+  for (const tk of ticks(max)) { el("line", { x1: l, x2: W - r, y1: Y(tk), y2: Y(tk), stroke: css("--grid") }, svg); el("text", { x: l - 6, y: Y(tk) + 4, "text-anchor": "end" }, svg).textContent = valueFmt(tk); }
+  el("line", { x1: l, x2: W - r, y1: Y(0), y2: Y(0), stroke: css("--axis") }, svg);
+  xs.forEach((x, i) => {
+    const cx = l + bw * i; el("text", { x: cx + bw / 2, y: H - 8, "text-anchor": "middle" }, svg).textContent = x;
+    let acc = 0; const w = Math.max(bw * 0.62, 2), off = (bw - w) / 2;
+    series.forEach(se => { const v = se.values[i] || 0; if (!v) return; const y1 = Y(acc + v), y0 = Y(acc);
+      const rect = el("rect", { x: cx + off, y: y1, width: w, height: Math.max(y0 - y1 - (acc ? 2 : 0), 1), rx: 3, fill: css(se.color), class: "m" }, svg);
+      bindTip(rect, `<b>${esc(x)}</b>${series.map(s => `${esc(s.name)}: ${valueFmt(s.values[i] || 0)}`).join("<br>")}`); acc += v; });
+  });
+}
+function lines(div, xs, series, { valueFmt = fmt } = {}) {
+  legend(div, series.map(s => [s.name, css(s.color)]));
+  const W = 640, H = 260, l = 44, r = 120, t = 12, b = 26;
+  const max = niceMax(Math.max(1, ...series.flatMap(s => s.values))); const X = i => l + (W - l - r) * (xs.length > 1 ? i / (xs.length - 1) : 0.5); const Y = v => H - b - (H - t - b) * v / max;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" }, div);
+  for (const tk of ticks(max)) { el("line", { x1: l, x2: W - r, y1: Y(tk), y2: Y(tk), stroke: css("--grid") }, svg); el("text", { x: l - 6, y: Y(tk) + 4, "text-anchor": "end" }, svg).textContent = valueFmt(tk); }
+  xs.forEach((x, i) => el("text", { x: X(i), y: H - 8, "text-anchor": "middle" }, svg).textContent = x);
+  const ends = [];
+  series.forEach(se => { const d = se.values.map((v, i) => `${i ? "L" : "M"}${X(i)},${Y(v || 0)}`).join("");
+    el("path", { d, fill: "none", stroke: css(se.color), "stroke-width": 2, "stroke-linejoin": "round" }, svg);
+    const li = se.values.length - 1; el("circle", { cx: X(li), cy: Y(se.values[li] || 0), r: 4, fill: css(se.color), stroke: css("--surface"), "stroke-width": 2 }, svg);
+    ends.push({ y: Y(se.values[li] || 0), text: `${se.name} ${valueFmt(se.values[li] || 0)}` }); });
+  ends.sort((a, b) => a.y - b.y); for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 13) ends[i].y = ends[i - 1].y + 13;
+  ends.forEach(e => el("text", { x: W - r + 8, y: e.y + 4, class: "val" }, svg).textContent = trunc(e.text, 20));
+  const cross = el("line", { y1: t, y2: H - b, stroke: css("--axis"), visibility: "hidden" }, svg);
+  const hit = el("rect", { x: l, y: t, width: W - l - r, height: H - t - b, fill: "transparent" }, svg);
+  hit.addEventListener("mousemove", e => { const bb = svg.getBoundingClientRect(); const px = (e.clientX - bb.left) * W / bb.width; const i = Math.max(0, Math.min(xs.length - 1, Math.round((px - l) / (W - l - r) * (xs.length - 1))));
+    cross.setAttribute("x1", X(i)); cross.setAttribute("x2", X(i)); cross.setAttribute("visibility", "visible");
+    showTip(e, `<b>${esc(xs[i])}</b>${series.map(s => `<span style="color:${css(s.color)}">●</span> ${esc(s.name)}: ${valueFmt(s.values[i] || 0)}`).join("<br>")}`); });
+  hit.addEventListener("mouseleave", () => { cross.setAttribute("visibility", "hidden"); hideTip(); });
+}
+
+// ---------------------------------------------------------------- donut (≤ 6 segments, labelled)
+function donut(div, items) {
+  const total = items.reduce((s, i) => s + i.value, 0); if (!total) { div.innerHTML = '<p class="note">No data yet.</p>'; return; }
+  const wrap = h("div", { style: "display:flex;flex-wrap:wrap;gap:16px;align-items:center" }); div.appendChild(wrap);
+  const S = 200, R = 90, r0 = 58, svg = el("svg", { viewBox: `0 0 ${S} ${S}`, style: "width:200px;max-width:100%;flex:none", role: "img" });
+  wrap.appendChild(svg); let a = -Math.PI / 2;
+  items.forEach(it => { if (!it.value) return; const a2 = a + 2 * Math.PI * it.value / total - (items.length > 1 ? 0.012 : 0);
+    const p = (ang, rad) => [S / 2 + rad * Math.cos(ang), S / 2 + rad * Math.sin(ang)]; const large = a2 - a > Math.PI ? 1 : 0;
+    const [x1, y1] = p(a, R), [x2, y2] = p(a2, R), [x3, y3] = p(a2, r0), [x4, y4] = p(a, r0);
+    const path = el("path", { d: `M${x1},${y1}A${R},${R} 0 ${large} 1 ${x2},${y2}L${x3},${y3}A${r0},${r0} 0 ${large} 0 ${x4},${y4}Z`, fill: css(it.color), class: "m" }, svg);
+    bindTip(path, `<b>${esc(it.label)}</b>${fmt(it.value)} (${pct(100 * it.value / total)})`); a = a2 + (items.length > 1 ? 0.012 : 0); });
+  el("text", { x: S / 2, y: S / 2 - 2, "text-anchor": "middle", class: "val", style: "font-size:20px;font-weight:650" }, svg).textContent = fmt(total);
+  el("text", { x: S / 2, y: S / 2 + 16, "text-anchor": "middle" }, svg).textContent = "projects";
+  const lg = h("div", { style: "display:grid;gap:6px;min-width:0;flex:1" });
+  items.forEach(it => lg.appendChild(h("div", { style: "display:flex;justify-content:space-between;gap:12px;font-size:12.5px" },
+    `<span><i style="display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;background:${css(it.color)}"></i>${esc(it.label)}</span><span style="font-variant-numeric:tabular-nums"><b>${fmt(it.value)}</b> <span class="na">${pct(100 * it.value / total)}</span></span>`)));
+  wrap.appendChild(lg);
+}
+
+// ---------------------------------------------------------------- histogram (ordinal ramp) & scatter
+function histo(div, bins, { unit = "projects" } = {}) {
+  const ramp = ["--r250", "--r350", "--r450", "--r550", "--r650", "--r650"];
+  const W = 640, H = 220, l = 44, r = 10, t = 16, b = 26, n = bins.length, bw = (W - l - r) / n;
+  const max = niceMax(Math.max(1, ...bins.map(x => x[1]))); const Y = v => H - b - (H - t - b) * v / max;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" }, div); const tot = bins.reduce((s, x) => s + x[1], 0);
+  for (const tk of ticks(max)) { el("line", { x1: l, x2: W - r, y1: Y(tk), y2: Y(tk), stroke: css("--grid") }, svg); el("text", { x: l - 6, y: Y(tk) + 4, "text-anchor": "end" }, svg).textContent = fmt(tk); }
+  bins.forEach(([lab, v], i) => { const x = l + i * bw + 2; el("text", { x: x + bw / 2 - 2, y: H - 8, "text-anchor": "middle" }, svg).textContent = lab;
+    if (!v) return; const rect = el("rect", { x, y: Y(v), width: bw - 4, height: Y(0) - Y(v), rx: 4, fill: css(ramp[Math.min(i, ramp.length - 1)]), class: "m" }, svg);
+    bindTip(rect, `<b>${esc(lab)}</b>${fmt(v)} ${unit} (${pct(100 * v / (tot || 1))})`);
+    el("text", { x: x + (bw - 4) / 2, y: Y(v) - 4, "text-anchor": "middle", class: "val" }, svg).textContent = fmt(v); });
+}
+function scatter(div, pts) {
+  if (!pts.length) { div.innerHTML = '<p class="note">No data yet.</p>'; return; }
+  const W = 640, H = 320, l = 44, r = 12, t = 10, b = 34, X = v => l + (W - l - r) * v / 100, Y = v => H - b - (H - t - b) * v / 100;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" }, div);
+  for (const tk of [0, 25, 50, 75, 100]) { el("line", { x1: l, x2: W - r, y1: Y(tk), y2: Y(tk), stroke: css("--grid") }, svg); el("text", { x: l - 6, y: Y(tk) + 4, "text-anchor": "end" }, svg).textContent = tk + "%";
+    el("line", { x1: X(tk), x2: X(tk), y1: t, y2: H - b, stroke: css("--grid") }, svg); el("text", { x: X(tk), y: H - 18, "text-anchor": "middle" }, svg).textContent = tk + "%"; }
+  el("text", { x: (W + l) / 2, y: H - 2, "text-anchor": "middle", class: "lbl" }, svg).textContent = "Construction progress (latest QPR)";
+  el("text", { x: 12, y: (H - b) / 2, "text-anchor": "middle", class: "lbl", transform: `rotate(-90 12 ${(H - b) / 2})` }, svg).textContent = "Units booked";
+  const done = css("--s3"), open = css("--s1");
+  pts.forEach(p => el("circle", { cx: X(Math.min(p[2], 100)), cy: Y(p[3]), r: 3.5, fill: p[6] === "completed" ? done : open, "fill-opacity": 0.55 }, svg));
+  const hit = el("rect", { x: l, y: t, width: W - l - r, height: H - t - b, fill: "transparent" }, svg);
+  hit.addEventListener("mousemove", e => { const bb = svg.getBoundingClientRect(); const px = (e.clientX - bb.left) * W / bb.width, py = (e.clientY - bb.top) * H / bb.height;
+    let best = null, bd = 1e9; for (const p of pts) { const d = (X(Math.min(p[2], 100)) - px) ** 2 + (Y(p[3]) - py) ** 2; if (d < bd) { bd = d; best = p; } }
+    if (best && bd < 400) showTip(e, `<b>${esc(best[0])}</b>${esc(best[1] ?? "")}<br>Progress ${pct(best[2])} · booked ${pct(best[3])}<br>${fmt(best[4])} booked / ${fmt(best[5])} unbooked`); else hideTip(); });
+  hit.addEventListener("mouseleave", hideTip);
+  legend(div, [["Not completed", open], ["Completed", done]]);
+}
+
+// ---------------------------------------------------------------- searchable table
+function bigTable(parent, cols, rows, { fmts = {}, pageSize = 200, placeholder = "Search" } = {}) {
+  const tools = h("div", { class: "tools" }); const inp = h("input", { type: "search", placeholder, "aria-label": placeholder, id: "q-" + Math.random().toString(36).slice(2, 8) });
+  const count = h("span", { class: "count" }); tools.append(inp, count); parent.appendChild(tools);
+  const wrap = h("div", { class: "tblwrap" }); parent.appendChild(wrap);
+  let sortI = -1, dir = 1, view = rows;
+  function render() { const q = inp.value.trim().toLowerCase(); view = q ? rows.filter(r => r.some(v => String(v ?? "").toLowerCase().includes(q))) : rows.slice();
+    if (sortI >= 0) view.sort((a, b) => { const x = a[sortI], y = b[sortI]; if (x == null) return 1; if (y == null) return -1; return (typeof x === "number" ? x - y : String(x).localeCompare(String(y))) * dir; });
+    wrap.innerHTML = ""; const t = tableEl(cols, view.slice(0, pageSize), fmts); wrap.appendChild(t);
+    t.querySelectorAll("th").forEach((th, i) => { th.onclick = () => { dir = sortI === i ? -dir : -1; sortI = i; render(); }; if (i === sortI) th.textContent += dir > 0 ? " ▲" : " ▼"; });
+    count.textContent = `${nf.format(view.length)} rows${view.length > pageSize ? ` · showing first ${pageSize} (search or sort to narrow)` : ""}`; }
+  inp.addEventListener("input", render); render();
+}
+
+// ---------------------------------------------------------------- page
+const D = DATA, K = D.kpi, Q = D.quality;
+const partial = K.analysed < K.projects;
+$("#chips").innerHTML = `<span class="chip ${partial ? "partial" : "full"}"><b>${nf.format(K.analysed)}</b> of ${nf.format(K.projects)} projects analysed${partial ? " · sample, crawl in progress" : ""}</span><span class="chip">Data checked <b>${esc(D.run_date)}</b></span>`;
+const TABS = [["overview", "Overview"], ["developers", "Developers"], ["sales", "Sales & inventory"], ["delivery", "Delivery & delays"], ["regulatory", "Complaints & regulatory"], ["localities", "Localities"], ["projects", "Projects"], ["quality", "Data quality"]];
+const nav = $("#tabs"), main = $("#main"), secs = {};
+TABS.forEach(([id, name], i) => { const b = h("button", { role: "tab", type: "button", "aria-selected": i ? "false" : "true", id: "tab-" + id }, name); nav.appendChild(b);
+  const s = h("section", { class: "tab", id }); s.hidden = !!i; main.appendChild(s); secs[id] = s;
+  b.onclick = () => { TABS.forEach(([o]) => { secs[o].hidden = o !== id; $("#tab-" + o).setAttribute("aria-selected", o === id ? "true" : "false"); }); try { localStorage.setItem("tab", id); } catch (e) {} if (!secs[id].dataset.done) { secs[id].dataset.done = 1; RENDER[id](secs[id]); } }; });
+const rowsOf = (arr, li = 0, vi = 1, tipf) => (arr || []).map(r => ({ label: r[li], values: [r[vi]], tip: tipf ? tipf(r) : `${fmt(r[2])} projects · ${fmt(r[3])} analysed` }));
+const statusColor = { "Completed": "--good", "Near Completion": "--s1", "Under Construction": "--s1", "Early Stage": "--s1", "Overdue": "--critical", "Stalled / No Recent Progress": "--serious", "Cancelled/Revoked": "--critical" };
+
+const RENDER = {
+  overview(s) {
+    const k = h("div", { class: "kpis" }); s.appendChild(k);
+    [["Projects", fmt(K.projects), `${fmt(K.residential)} residential · ${fmt(K.mixed)} mixed`], ["Developers", fmt(K.developers), "in analysed projects (PAN/CIN merged)"],
+     ["Delayed", fmt(K.delayed), "past original completion date"],
+     ["Units (analysed)", fmt(K.units), `${fmt(K.sold)} booked · ${fmt(K.unsold)} unbooked`], ["Booked (sold)", pct(K.sales_pct), "of units with booking data"],
+     ["Completed", fmt(K.completed), "project-end filing (Form 4)"], ["Overdue", fmt(K.overdue), "past latest approved date"],
+     ["Extended projects", fmt(K.extended_projects), "≥ 1 approved extension"], ["Avg construction progress", pct(K.avg_progress), "latest QPR, analysed projects"],
+     ["Complaints", fmt(K.complaints), `${fmt(K.suo_motu)} suo-motu · ${fmt(K.challans)} challans`]]
+      .forEach(([l, v, n]) => k.appendChild(h("div", { class: "kpi" }, `<div class="l">${l}</div><div class="v">${v}</div><div class="n">${n}</div>`)));
+    const g = h("div", { class: "grid2" }); s.appendChild(g);
+    const groups = { "Completed": 0, "In progress": 0, "Overdue": 0, "Stalled / no recent progress": 0, "Unknown": 0 };
+    D.status_mix.forEach(([c, n]) => { if (c === "Completed") groups["Completed"] += n; else if (c === "Overdue" || c === "Cancelled/Revoked") groups["Overdue"] += n; else if (c.startsWith("Stalled")) groups["Stalled / no recent progress"] += n; else if (c.startsWith("Unknown")) groups["Unknown"] += n; else groups["In progress"] += n; });
+    card(g, "Delivery status", "Analysed projects. Completed = project-end (Q-E) filing with Form 4; overdue = past the latest approved completion date.",
+      d => donut(d, [["Completed", "--good"], ["In progress", "--s1"], ["Overdue", "--critical"], ["Stalled / no recent progress", "--serious"], ["Unknown", "--none"]].map(([l, c]) => ({ label: l, value: groups[l], color: c }))),
+      { cols: ["Category", "Projects"], rows: D.status_mix });
+    card(g, "New registrations per year", "Projects approved by GujRERA each year (all " + fmt(K.projects) + " projects).",
+      d => columns(d, D.trend_reg.years, [{ name: "Residential", values: D.trend_reg.residential, color: "--s1" }, { name: "Mixed", values: D.trend_reg.mixed, color: "--s2" }]),
+      { cols: ["Year", "Residential", "Mixed"], rows: D.trend_reg.years.map((y, i) => [y, D.trend_reg.residential[i], D.trend_reg.mixed[i]]) });
+    card(g, "Market activity trend", "Per year, analysed projects: project-end filings, extensions approved, complaints filed, suo-motu proceedings.",
+      d => lines(d, D.trend_events.years, [{ name: "Completions filed", values: D.trend_events.completion_filings, color: "--s3" }, { name: "Extensions", values: D.trend_events.extensions_approved, color: "--s1" }, { name: "Complaints", values: D.trend_events.complaints, color: "--s2" }, { name: "Suo-motu", values: D.trend_events.suo_motu, color: "--s4" }]),
+      { cols: ["Year", "Completions filed", "Extensions approved", "Complaints", "Suo-motu"], rows: D.trend_events.years.map((y, i) => [y, D.trend_events.completion_filings[i], D.trend_events.extensions_approved[i], D.trend_events.complaints[i], D.trend_events.suo_motu[i]]) });
+    card(g, "Top developers by projects", "Ahmedabad residential + mixed projects per developer entity.",
+      d => hbar(d, rowsOf(D.top.projects)), { cols: ["Developer", "Projects", "Projects", "Analysed"], rows: D.top.projects });
+  },
+  developers(s) {
+    const g = h("div", { class: "grid2" }); s.appendChild(g);
+    card(g, "Largest portfolios by units", "Booked vs unbooked units (GujRERA block booking chart).",
+      d => hbar(d, D.top.units_sold_unsold.map(r => ({ label: r[0], values: [r[1] || 0, r[2] || 0], show: fmt(r[3]), tip: `${fmt(r[4])} projects · ${fmt(r[3])} declared units` })), { series: [["Booked", "--s1"], ["Unbooked", "--s2"]] }),
+      { cols: ["Developer", "Booked", "Unbooked", "Units", "Projects"], rows: D.top.units_sold_unsold });
+    card(g, "Most completed projects", "Projects with a project-end filing (Form 4) or portal status Completed.", d => hbar(d, rowsOf(D.top.completed)), { cols: ["Developer", "Completed", "Projects", "Analysed"], rows: D.top.completed });
+    card(g, "Highest completion rate", "Completed ÷ analysed projects. Developers with at least 3 analysed projects.", d => hbar(d, rowsOf(D.top.completion_rate), { valueFmt: pct }), { cols: ["Developer", "Completion rate %", "Projects", "Analysed"], rows: D.top.completion_rate });
+    card(g, "Highest sales %", "Booked ÷ (booked + unbooked). At least 3 projects with booking data and 100 units.", d => hbar(d, rowsOf(D.top.sales_pct), { valueFmt: pct }), { cols: ["Developer", "Sales %", "Projects", "With unit data"], rows: D.top.sales_pct });
+    const c = h("div", { class: "card" }, `<h3>Developer comparison</h3><p class="def">All developers. Click a column to sort. Developer = GujRERA promoter account(s), merged only on identical PAN or company registration number.</p>`);
+    s.appendChild(c); const cols = D.developers.cols;
+    const fm = {}; cols.forEach((n, i) => { if (n.endsWith("_pct")) fm[i] = pct; });
+    bigTable(c, cols.map(x => x.replace(/_/g, " ")), D.developers.rows, { fmts: fm, placeholder: "Search developer" });
+  },
+  sales(s) {
+    const k = h("div", { class: "kpis" }); s.appendChild(k);
+    [["Units booked", fmt(K.sold), "sold, as reported in QPRs"], ["Units unbooked", fmt(K.unsold), "unsold inventory"], ["Booked share", pct(K.sales_pct), "all projects with booking data"], ["Booked share, in progress", pct(K.sales_pct_active), "projects not yet completed"], ["Projects with unit data", fmt(Q.projects_with_unit_data), `of ${fmt(K.analysed)} analysed`]]
+      .forEach(([l, v, n]) => k.appendChild(h("div", { class: "kpi" }, `<div class="l">${l}</div><div class="v">${v}</div><div class="n">${n}</div>`)));
+    const g = h("div", { class: "grid2" }); s.appendChild(g);
+    card(g, "Projects by share of units booked", "Projects with booking data.", d => histo(d, D.sales_hist), { cols: ["Booked share", "Projects"], rows: D.sales_hist });
+    card(g, "Largest unsold inventory", "Unbooked units per developer.", d => hbar(d, rowsOf(D.top.unsold)), { cols: ["Developer", "Unbooked units", "Projects", "Analysed"], rows: D.top.unsold });
+    card(g, "Construction progress vs units booked", "One dot per project. Hover for the project.", d => scatter(d, D.scatter),
+      { cols: ["Project", "Developer", "Progress %", "Booked %", "Booked", "Unbooked", "Status"], rows: D.scatter });
+    const o = D.outliers.filter(r => /unsold|sales/i.test(r[0]));
+    const c = h("div", { class: "card" }, `<h3>Inventory combinations worth a look</h3><p class="def">Completed with high unsold stock, high progress with low sales, low progress with high sales, long delay with high unsold stock.</p>`);
+    g.appendChild(c); bigTable(c, ["Pattern", "Project", "RERA no.", "Developer", "Locality", "Why flagged"], o, { placeholder: "Search projects" });
+  },
+  delivery(s) {
+    const g = h("div", { class: "grid2" }); s.appendChild(g);
+    card(g, "Construction progress", "Latest QPR physical progress of analysed projects.", d => histo(d, D.prog_hist), { cols: ["Progress", "Projects"], rows: D.prog_hist });
+    card(g, "Time past the approved completion date", "Projects not yet completed. Measured against the latest approved date (after extensions).", d => histo(d, D.delay_hist), { cols: ["Delay", "Projects"], rows: D.delay_hist });
+    card(g, "Extensions per project", "Approved extensions (an extension is a GujRERA approval, not a finding of wrongdoing).",
+      d => donut(d, D.ext_hist.map(([l, v], i) => ({ label: l === "0" ? "No extension" : `${l} extension${l === "1" ? "" : "s"}`, value: v, color: ["--none", "--r350", "--r550", "--r650"][i] }))), { cols: ["Extensions", "Projects"], rows: D.ext_hist });
+    card(g, "Completion deadlines by year", "Original vs latest approved completion year, analysed projects.",
+      d => columns(d, D.due.years, [{ name: "Original date", values: D.due.original_due, color: "--s1" }, { name: "Latest approved date", values: D.due.current_due, color: "--s2" }], { stacked: false }),
+      { cols: ["Year", "Original", "Latest approved"], rows: D.due.years.map((y, i) => [y, D.due.original_due[i], D.due.current_due[i]]) });
+    card(g, "Most overdue projects by developer", "Projects past the latest approved date with no project-end filing.", d => hbar(d, rowsOf(D.top.overdue)), { cols: ["Developer", "Overdue", "Projects", "Analysed"], rows: D.top.overdue });
+    card(g, "Most extensions by developer", "Total approved extensions across the developer's projects.", d => hbar(d, rowsOf(D.top.extensions)), { cols: ["Developer", "Extensions", "Projects", "Analysed"], rows: D.top.extensions });
+    card(g, "Delay exposure", "Mean of delay rate, extension rate and overdue/stalled rate. At least 3 analysed projects.", d => hbar(d, rowsOf(D.top.delay_exposure)), { cols: ["Developer", "Index", "Projects", "Analysed"], rows: D.top.delay_exposure });
+    const o = D.outliers.filter(r => /delay|extension|Stalled/i.test(r[0]));
+    const c = h("div", { class: "card" }, `<h3>Flagged delivery cases</h3><p class="def">Each row states the data behind the flag.</p>`); g.appendChild(c);
+    bigTable(c, ["Pattern", "Project", "RERA no.", "Developer", "Locality", "Why flagged"], o, { placeholder: "Search projects" });
+  },
+  regulatory(s) {
+    const g = h("div", { class: "grid2" }); s.appendChild(g);
+    const cc = D.complaint_cats; const top5 = cc.slice(0, 5); const rest = cc.slice(5).reduce((a, r) => a + r[1], 0);
+    const lab = { rera_complaint: "Complaint to Authority (Form A)", adjudication_complaint: "Adjudication (Form B)", review: "Review", ratification: "Ratification", conciliation: "Conciliation", complaint_unspecified_form: "Complaint (form not stated)", unknown: "Other" };
+    card(g, "Complaints by type", "Complaints linked to analysed projects.", d => donut(d, [...top5.map((r, i) => ({ label: lab[r[0]] || r[0], value: r[1], color: ["--s1", "--s2", "--s3", "--s4", "--r650"][i] })), ...(rest ? [{ label: "Other", value: rest, color: "--none" }] : [])]),
+      { cols: ["Type", "Complaints"], rows: cc });
+    card(g, "Authority actions by type", "Suo-motu proceedings (by code) and challans (penalties).", d => hbar(d, D.action_types.map(r => ({ label: r[0], values: [r[1]], tip: "" })), { labelW: 260 }), { cols: ["Type", "Count"], rows: D.action_types });
+    card(g, "Most complaints by developer", "Complaints are records, not proof of wrongdoing.", d => hbar(d, rowsOf(D.top.complaints)), { cols: ["Developer", "Complaints", "Projects", "Analysed"], rows: D.top.complaints });
+    card(g, "Most regulatory actions by developer", "Suo-motu proceedings and challans.", d => hbar(d, rowsOf(D.top.regulatory)), { cols: ["Developer", "Actions", "Projects", "Analysed"], rows: D.top.regulatory });
+    card(g, "Regulatory exposure per project", "(Complaints + suo-motu + challans) ÷ analysed projects. At least 3 projects.", d => hbar(d, rowsOf(D.top.regulatory_density)), { cols: ["Developer", "Per project", "Projects", "Analysed"], rows: D.top.regulatory_density });
+  },
+  localities(s) {
+    const g = h("div", { class: "grid2" }); s.appendChild(g);
+    const L = D.localities.rows; const by = (i, n = 15, f = r => true) => L.filter(r => r[i] != null && f(r)).sort((a, b) => b[i] - a[i]).slice(0, n);
+    const T = D.talukas; const tt = T.slice(0, 5), trest = T.slice(5).reduce((a, r) => a + r[1], 0);
+    card(g, "Projects by taluka", "GujRERA sub-district field.", d => donut(d, [...tt.map((r, i) => ({ label: r[0], value: r[1], color: ["--s1", "--s2", "--s3", "--s4", "--r650"][i] })), ...(trest ? [{ label: "Other talukas", value: trest, color: "--none" }] : [])]),
+      { cols: ["Taluka", "Projects", "Units", "Booked", "Unbooked", "Unbooked %", "Delay rate %", "Avg progress %"], rows: T });
+    card(g, "Localities with the most projects", "GujRERA moje / revenue-village field.", d => hbar(d, by(1).map(r => ({ label: r[0], values: [r[1]], tip: `Top: ${esc(r[10] || "—")}` }))), { cols: ["Locality", "Projects"], rows: by(1).map(r => [r[0], r[1]]) });
+    card(g, "Localities with the most unsold units", "Unbooked units, analysed projects.", d => hbar(d, by(4).map(r => ({ label: r[0], values: [r[4]], tip: `${pct(r[5])} unbooked · ${fmt(r[1])} projects` }))), { cols: ["Locality", "Unbooked units"], rows: by(4).map(r => [r[0], r[4]]) });
+    card(g, "Highest delay rate (≥ 5 projects)", "Share of projects past their original completion date.", d => hbar(d, by(6, 15, r => r[1] >= 5).map(r => ({ label: r[0], values: [r[6]], tip: `${fmt(r[1])} projects` })), { valueFmt: pct }), { cols: ["Locality", "Delay rate %"], rows: by(6, 15, r => r[1] >= 5).map(r => [r[0], r[6]]) });
+    card(g, "Highest average progress (≥ 5 projects)", "Mean latest QPR progress.", d => hbar(d, by(7, 15, r => r[1] >= 5).map(r => ({ label: r[0], values: [r[7]], tip: `${fmt(r[1])} projects` })), { valueFmt: pct }), { cols: ["Locality", "Avg progress %"], rows: by(7, 15, r => r[1] >= 5).map(r => [r[0], r[7]]) });
+    const c = h("div", { class: "card" }, `<h3>All localities</h3><p class="def">Top developers are listed with their project count in that locality.</p>`); s.appendChild(c);
+    bigTable(c, D.localities.cols.map(x => x.replace(/_/g, " ")), L, { fmts: { 5: pct, 6: pct, 7: pct }, placeholder: "Search locality or developer" });
+  },
+  projects(s) {
+    const c = h("div", { class: "card" }, `<h3>All projects</h3><p class="def">Search by name, RERA number, developer or locality. Click a column to sort.</p>`); s.appendChild(c);
+    bigTable(c, D.projects.cols.map(x => x.replace(/_/g, " ")), D.projects.rows, { fmts: { 13: pct, 17: pct }, placeholder: "Search projects" });
+  },
+  quality(s) {
+    const c = h("div", { class: "card" }, `<h3>Data coverage</h3><p class="def">“Missing” percentages are among analysed projects.</p>`); s.appendChild(c);
+    const dq = h("div", { class: "dq" }); c.appendChild(dq);
+    for (const [k, v] of Object.entries(Q)) { if (typeof v === "object" && v) { for (const [k2, v2] of Object.entries(v)) dq.appendChild(h("div", {}, `<span>missing ${esc(k2.replace(/_/g, " "))}</span><span>${pct(v2)}</span>`)); continue; }
+      dq.appendChild(h("div", {}, `<span>${esc(k.replace(/_/g, " "))}</span><span>${typeof v === "number" ? fmt(v) : esc(v)}</span>`)); }
+    s.appendChild(h("div", { class: "card note" }, `<h3>How to read this</h3><ul>
+      <li>Sold = units booked and unsold = units unbooked, as promoters report them to GujRERA each quarter. Cancellations are not published.</li>
+      <li>Quarterly reporting stops once a project files its completion, so booking figures for completed projects are frozen at their last report. Sales after completion are not published, so unsold stock of completed projects can be overstated.</li>
+      <li>Completed = a project-end (Q-E) filing with the architect's completion certificate (Form 4), or portal status Completed. The portal status alone marks very few projects completed.</li>
+      <li>Delayed = past the original completion date. Overdue = past the latest approved date with no completion filing. Stalled = progress gain under 2 points over the last 3 reports, or no report for 9+ months.</li>
+      <li>Complaints and regulatory actions are linked through each project's GujRERA application list and the registration serial in published orders. Matters without a registration number cannot be attributed.</li>
+      <li>Developers are GujRERA promoter accounts, merged only when they share a PAN or company registration number. Similar names stay separate.</li>
+      <li>Complainant names are not stored.</li></ul>`));
+  },
+};
+let start = "overview"; try { const t = localStorage.getItem("tab"); if (t && RENDER[t]) start = t; } catch (e) {}
+$("#tab-" + start).click();
+</script>

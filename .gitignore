@@ -1,0 +1,34 @@
+# Python / tooling
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Node / build output (run\run_webapp.ps1 rebuilds dist automatically)
+webapp/frontend/node_modules/
+webapp/frontend/dist/
+
+# Runtime logs, locks, crawler output
+*.log
+*.out
+*.lock
+
+# Data: ignore everything except the published 4,520-project app snapshot.
+# Raw crawl databases are large (>100 MiB) and contain personal contact data; regenerate with `cli.py crawl`.
+gujrera_scraper/data/*
+!gujrera_scraper/data/app/
+gujrera_scraper/data/app/*
+!gujrera_scraper/data/app/gujrera_ahmedabad.db
+
+# SQLite sidecar files anywhere
+*.db-wal
+*.db-shm
+*.db-journal
+
+# Generated QA output (webapp/qa/validate_metrics.py)
+webapp/qa/out/
+
+# Secrets
+.env
+.env.*

@@ -1,0 +1,55 @@
+# Analytical Risk Score configuration.
+#
+# THIS IS AN ANALYTICAL RISK SCORE COMPUTED BY THIS PIPELINE FROM PUBLIC GUJRERA DATA.
+# IT IS NOT AN OFFICIAL RERA RISK RATING and does not express any legal finding.
+#
+# Every component is scaled 0 (no concern) .. 100 (maximum concern). The score is the weighted mean of the
+# components that have data for the project; weights of components without data are re-distributed
+# proportionally and `score_coverage` reports the share of weight that had data.
+# Change weights / parameters here and re-run `python cli.py analyze` — no code changes needed.
+
+label: "Analytical Risk Score (not an official RERA rating)"
+
+weights:            # must be >= 0; they are normalised to sum to 1
+  delay: 0.25
+  regulatory: 0.20
+  complaints: 0.20
+  completion: 0.15
+  extensions: 0.10
+  stagnation: 0.10
+  inventory: 0.00   # set > 0 to include unsold inventory in the score (shown as a separate metric by default)
+
+components:
+  delay:
+    # days beyond the latest approved completion date (ongoing) or beyond it at Q-E filing (completed)
+    full_scale_days: 730          # >= 2 years late => 100
+  extensions:
+    points_per_extension: 34      # 3 extensions => 100
+  complaints:
+    points_per_complaint: 20      # complainant-initiated matters linked to the project; 5 => 100
+    pending_multiplier: 1.5       # pending matters weigh more than resolved ones
+  regulatory:
+    points_per_suo_motu: 20
+    points_per_penalty_order: 30  # orders with penalty = YES, and challans levied
+  completion:
+    # schedule gap = % of approved timeline elapsed  minus  % physical progress (only for not-completed projects)
+    full_scale_gap_pp: 50         # a 50 percentage-point gap => 100
+  stagnation:
+    stalled_score: 100            # project flagged stalled (see settings.yaml analysis.*)
+    grace_months: 3               # months since last QPR with no penalty
+    full_scale_months: 9
+  inventory:
+    early_stage_factor: 0.5       # unsold % counts half when physical progress < 75 %
+
+flags:              # evidence-backed flags listed in the high-risk project report
+  severe_delay_days: 365
+  repeated_extension_count: 2
+  low_progress_pct: 25
+  low_progress_min_elapsed_pct: 50
+  high_complaints: 3
+  high_unsold_pct: 50
+  high_unsold_min_progress_pct: 75
+
+developer:
+  # developer score = units-weighted mean of its projects' component scores (equal weight when units unknown)
+  min_projects_for_ranking: 1

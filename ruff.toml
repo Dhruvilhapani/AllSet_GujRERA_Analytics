@@ -1,0 +1,10 @@
+line-length = 120
+target-version = "py311"
+extend-exclude = ["gujrera_scraper/data", "webapp/frontend/node_modules", ".venv"]
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF"]
+ignore = ["S101"]  # asserts are fine in tests
+
+[lint.isort]
+known-first-party = ["webapp"]

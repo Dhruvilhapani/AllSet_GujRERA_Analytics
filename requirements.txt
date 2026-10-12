@@ -1,0 +1,12 @@
+# Everything needed to run the pipeline, the web app and the tests:
+#   python -m venv .venv
+#   .venv\Scripts\python.exe -m pip install -r requirements.txt
+-r gujrera_scraper/requirements.txt
+
+# web app (webapp/server)
+fastapi>=0.115
+uvicorn>=0.30
+numpy>=2.0
+
+# QA only (webapp/qa/validate_metrics.py); the server never imports it
+matplotlib>=3.8

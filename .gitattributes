@@ -1,0 +1,9 @@
+* text=auto
+
+# Never apply line-ending conversion or text diffs to binary data
+*.db binary
+*.sqlite binary
+*.png binary
+*.jpg binary
+*.pdf binary
+*.xlsx binary
