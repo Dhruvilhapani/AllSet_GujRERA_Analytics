@@ -98,6 +98,82 @@ export function Segmented({ options, value, onChange, label }) {
   )
 }
 
+/**
+ * Tabs with full semantics: a tablist (arrow keys move between tabs) whose tabs control `TabPanel`s.
+ * Pair with <TabPanel idPrefix=… id=… active=…>; only the active panel is rendered.
+ */
+export function Tabs({ tabs, value, onChange, label, idPrefix }) {
+  const move = (e, i) => {
+    const step = { ArrowRight: 1, ArrowLeft: -1 }[e.key]
+    if (!step) return
+    e.preventDefault()
+    const next = tabs[(i + step + tabs.length) % tabs.length]
+    onChange(next.value)
+    document.getElementById(`${idPrefix}-tab-${next.value}`)?.focus()
+  }
+  return (
+    <div role="tablist" aria-label={label} style={{ display: 'flex', gap: 4, flexWrap: 'wrap', borderBottom: '1px solid var(--line)', margin: '0 0 16px' }}>
+      {tabs.map((t, i) => {
+        const active = t.value === value
+        return (
+          <button
+            key={t.value}
+            id={`${idPrefix}-tab-${t.value}`}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            aria-controls={`${idPrefix}-panel-${t.value}`}
+            tabIndex={active ? 0 : -1}
+            onClick={() => onChange(t.value)}
+            onKeyDown={e => move(e, i)}
+            style={{
+              padding: '9px 14px', border: 'none', borderBottom: `2px solid ${active ? 'var(--accent)' : 'transparent'}`, marginBottom: -1,
+              background: 'transparent', cursor: 'pointer', fontSize: 13.5, fontWeight: active ? 650 : 500,
+              color: active ? 'var(--ink)' : 'var(--ink-3)',
+            }}
+          >
+            {t.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+export function TabPanel({ idPrefix, id, active, children }) {
+  if (!active) return null
+  return <div role="tabpanel" id={`${idPrefix}-panel-${id}`} aria-labelledby={`${idPrefix}-tab-${id}`} tabIndex={0} style={{ outline: 'none' }}>{children}</div>
+}
+
+/** Previous / Next footer for server-paged tables. */
+export function Pager({ page, pages, onPage, total, pageSize, noun = 'rows' }) {
+  const from = total ? (page - 1) * pageSize + 1 : 0
+  const to = Math.min(total, page * pageSize)
+  return (
+    <footer className="body muted" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '12px 20px', flexWrap: 'wrap' }}>
+      <span>{total != null ? `${fmtInt(from)}–${fmtInt(to)} of ${fmtInt(total)} ${noun} · page ${page} of ${pages}` : `Page ${page} of ${pages}`}</span>
+      <span style={{ display: 'flex', gap: 8 }}>
+        <SmallButton disabled={page <= 1} onClick={() => onPage(page - 1)}>Previous</SmallButton>
+        <SmallButton disabled={page >= pages} onClick={() => onPage(page + 1)}>Next</SmallButton>
+      </span>
+    </footer>
+  )
+}
+
+export function SearchInput({ value, onChange, placeholder, label, id }) {
+  return (
+    <input
+      id={id}
+      type="search"
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      placeholder={placeholder}
+      aria-label={label}
+      style={{ flex: '1 1 220px', maxWidth: 340, padding: '7px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--line-strong)', background: 'var(--card)', color: 'var(--ink)', fontSize: 13 }}
+    />
+  )
+}
+
 export function FilterSelect({ value, onChange, options, ariaLabel, id }) {
   return (
     <select

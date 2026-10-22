@@ -66,3 +66,49 @@ progress, unit counts, Q-E status, reg. no.) in `project_status_history` with `l
 ≈ 13,884 projects × 15 endpoints + ≈ 2 dependent calls + unique promoters + ~200 complaint lists
 ≈ 230 k requests ≈ 24–26 h at 2.5 requests/s. Critical documents: ≈ 16 k certificates + Q-E / completion uploads
 + ≈ 10 k orders.
+
+## Categories and cities (Residential, Mixed, Commercial, Plotted × Ahmedabad, Gandhinagar)
+
+The four list endpoints share one path and one row schema; only the last path segment differs
+(`.../get-district-wise-projectlist/0/0/all/all/{Residential|Mixed|Commercial|Plotted}`), so `config/settings.yaml`
+lists them in `target_project_types`. Each response covers all of Gujarat, so scope is applied while reading it:
+
+* `district_scoped_types: [list_commercial, list_plotted]` are limited to `target_districts` (Ahmedabad,
+  Gandhinagar; matched case-insensitively because the source has spellings such as `AHmedabad`) before anything is
+  queued or parsed. Residential and Mixed keep their original all-Gujarat scope.
+* Live counts when this was added: Ahmedabad 2,271 / 2,269 / 890 / 71 and Gandhinagar 723 / 764 / 143 / 46
+  (Residential / Mixed / Commercial / Plotted) = 7,177 projects. `record_universe_quality` compares the dashboard grid
+  with the list rows per type and city.
+
+## Unit layer (block-wise and unit-wise booking status)
+
+Limited to `units.districts`. Queue tasks per project: `qtr_form_ids`, `block_names`, `block_master` (plus the
+existing `block_chart`), then `form_three` and `form_one` (facilities / amenities, floors and lifts per block) once the
+latest form ids are known. After the queue drains,
+`Crawler.enqueue_unit_lists` queues one **POST** per block (`entity_type = project_block`, `entity_id = "<project>|<block>"`);
+`raw_responses.url` for those is `…/get-inv-details-for-view#blockName=<b>&formThreeId=<id>` (the fragment keeps the URL
+unique per request and is never sent). `cli.py crawl` and `cli.py backfill-units` run both stages and repeat until nothing
+new is queued, so an interrupted run resumes cleanly.
+
+* **Incremental:** a block is fetched again only if no response for exactly that Form 3 id exists or the stored one is
+  older than `units.refetch_days`; a new quarterly Form 3 has a new id, so it is picked up automatically. `qtr_form_ids` and
+  `form_three` are in `volatile_endpoints` (two cheap requests per project).
+* **Fail fast on optional data:** `form_three` (header) is `optional`: one retry, and a persistent HTTP 500 is recorded
+  as `empty`, not `failed` — the unit rows do not depend on it.
+* **Completeness** is decided at parse time (`parser/unit_parser.py`): see `projects.unit_data_state` in the data
+  dictionary. Failed tasks (`crawl_queue.status = 'failed'`) surface as `error`, never as "no units".
+* **Volume:** ≈ 7,200 projects × (3 fixed + 2 form headers + ≈ 2.6 blocks) ≈ 55 k requests ≈ 6 h at 2.5 req/s; Commercial / Plotted /
+  Gandhinagar projects additionally need the ordinary 15-endpoint crawl (≈ 2,600 new projects ≈ 40 k requests).
+
+### Moving an existing crawl onto the new scope
+
+```powershell
+python cli.py crawl --mode incremental     # new run: queues the new Commercial/Plotted/Gandhinagar projects (all endpoints)
+python cli.py backfill-units               # unit layer for every project of the configured cities (idempotent, resumable)
+python cli.py parse
+python cli.py verify-units --sample 30     # compare random complete projects with the live portal
+python cli.py refresh-app --districts Ahmedabad Gandhinagar   # the one app database + exports/unit_data_coverage.csv
+```
+
+`crawl --resume` continues only the run that was already queued, so it does not add the new categories. Validation runs:
+`crawl --mode sample --limit 30 --skip-complaints --db <scratch.db>` and `backfill-units --limit 8 --db <scratch.db>`.

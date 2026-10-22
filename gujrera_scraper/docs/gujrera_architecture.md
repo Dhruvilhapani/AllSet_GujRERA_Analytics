@@ -107,3 +107,22 @@ Note that district / taluka / authority segments may contain spaces.
 * Registration certificates of older extensions were re-issued as FORM C carrying the `/EXn/` number.
 * Complaint lists are queried per district spelling as shown in the grid (`Surat` and `SURAT` both appear); rows
   are de-duplicated on the acknowledgement number.
+
+## Unit-wise booking endpoints (project page: "Unit Wise Booking Status" / "Block Booking Details")
+
+Observed from the portal's own network traffic and bundle (2026-10-21). All are unauthenticated.
+
+| Call | Purpose |
+|---|---|
+| `GET quarter/public/get-qtr-form-details/{projectId}` | `{formOneId, formTwoId, formThreeId}` of the **latest** filings |
+| `GET citizen_survey/citizen_claim/get-project-all-block{projectId}` | `{blockName: [unit numbers…]}`; drives the block selector, empty for some projects |
+| `POST formthree/public/get-inv-details-for-view` body `{"blockName": "A", "formThreeId": 123}` | one row per unit: `id, formThreePk, blockId, blockName, usage, flatNo, carpetArea, areaofExBalcony, status, unitConsideration, receivedAmount, balanceAmount, encumbranceStatus, dateOfAgrrement, alloteeName, typeofKYC, kycId, redeveloped, mobileNumber, createdOn` |
+| `GET formthree/public/getform-three-byid/{formThreeId}` | Form 3 header: `submissionOn`, `numberOfUnits`, `bookedUnit`, … (HTTP 500 for some ids) |
+| `GET project_reg/project-app/getproject-blocklist/{projectId}` | block master: `blockId`, development dates, height / FSI / built-up area |
+| `GET formone/public/getfrom-one-photos-by-name/{formOneId}/{block}` | block photo document ids (not crawled) |
+
+Facts that shape the data model: amounts come back as `******`, allottee fields as null / masked; the balcony and
+open-terrace area is a single field; there is no per-unit floor; there is no per-quarter Form 3 id, so only the latest
+snapshot is available (booking history cannot be reconstructed from the portal); `getform-three-byid` returns only the
+registration-time list of units, while `get-inv-details-for-view` returns the current one. The `Commercial` and
+`Plotted` list tokens were verified against the live portal.

@@ -47,12 +47,15 @@ EVIDENCE_FIELDS = {
 
 
 # ---------------------------------------------------------------------------------------------- data assembly
-def scope_projects(conn: sqlite3.Connection, settings: dict, district: str) -> tuple[pd.DataFrame, dict]:
+def scope_projects(conn: sqlite3.Connection, settings: dict, district: str | list[str]) -> tuple[pd.DataFrame, dict]:
+    """Projects of one district (str) or several (list), matched case-insensitively (the source has 'AHmedabad')."""
     res = build(conn, settings)
     p = res["projects"]
-    p = p[p["district"].fillna("").str.strip().str.lower() == district.strip().lower()].copy()
+    wanted = {d.strip().lower() for d in ([district] if isinstance(district, str) else district)}
+    p = p[p["district"].fillna("").str.strip().str.lower().isin(wanted)].copy()
     loc = pd.read_sql_query("SELECT project_id, village_moje, pincode, latitude, longitude, planning_authority, "
-                            "tp_number, full_address FROM project_locations", conn)
+                            "tp_number, tp_name, fp_number, survey_number, city_survey_number, full_address "
+                            "FROM project_locations", conn)
     p = p.merge(loc, on="project_id", how="left")
     p["locality"] = p["village_moje"].map(_clean_place)
     p["locality_source"] = p["locality"].map(lambda v: "GujRERA moje field" if v else None)
@@ -200,6 +203,8 @@ def developer_table(p: pd.DataFrame, devs: pd.DataFrame, conn: sqlite3.Connectio
             "projects": len(g), "projects_analyzed": len(crawled),
             "residential_projects": int((g["project_category"] == "residential").sum()),
             "mixed_projects": int((g["project_category"] == "mixed").sum()),
+            "commercial_projects": int((g["project_category"] == "commercial").sum()),
+            "plotted_projects": int((g["project_category"] == "plotted").sum()),
             "completed": int(cat.get("Completed", 0)),
             "ongoing": int(len(crawled) - cat.get("Completed", 0) - cat.get("Cancelled/Revoked", 0)),
             "near_completion": int(cat.get("Near Completion", 0)),

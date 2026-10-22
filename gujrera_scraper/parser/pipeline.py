@@ -9,24 +9,43 @@ from datetime import date
 
 from database import repositories as repo
 from database.db import RawStore, utcnow
-from parser import complaint_parser
+from parser import complaint_parser, facility_parser, unit_parser
 from parser.common import clean_str, normalize_name
 from parser.project_parser import ProjectParser
 from parser.promoter_parser import parse_promoter
+from scraper.endpoints import TYPE_LABEL
 from scraper.orchestrator import list_row_hash
+from scraper.project_listing import in_scope, in_unit_scope
 
 log = logging.getLogger(__name__)
 
 
-def load_universe(raw: RawStore, list_keys: list[str]) -> tuple[dict[int, dict], dict]:
+def load_universe(raw: RawStore, list_keys: list[str], settings: dict | None = None) -> tuple[dict[int, dict], dict]:
+    """Project list rows of the target types. With `settings`, district-scoped types (commercial / plotted) are
+    limited to `target_districts`, like the crawl."""
     rows: dict[int, dict] = {}
     for key in list_keys:
         j, _ = raw.load(key, key)
         for r in (j or {}).get("data") or []:
+            if settings is not None and not in_scope(r, key, settings):
+                continue
             pid = int(r["projectRegId"])
             rows.setdefault(pid, r)
     counts, _ = raw.load("dashboard_counts", "dashboard")
     return rows, counts or {}
+
+
+def failed_unit_blocks(conn: sqlite3.Connection) -> dict[int, set[str]]:
+    """{project_id: block names} whose unit_list task ended 'failed' (latest status per task across runs)."""
+    latest: dict[str, str] = {}
+    for r in conn.execute("SELECT entity_id, status FROM crawl_queue WHERE endpoint_key='unit_list' ORDER BY id"):
+        latest[r["entity_id"]] = r["status"]
+    out: dict[int, set[str]] = defaultdict(set)
+    for eid, status in latest.items():
+        if status == "failed":
+            pid, _, block = eid.partition("|")
+            out[int(pid)].add(block)
+    return out
 
 
 def parse_all(conn: sqlite3.Connection, settings: dict, run_id: str | None = None,
@@ -35,11 +54,12 @@ def parse_all(conn: sqlite3.Connection, settings: dict, run_id: str | None = Non
     now = utcnow()
     run_date = date.today().isoformat()
     salt = settings["privacy"]["hash_salt"]
-    universe, counts = load_universe(raw, settings["target_project_types"])
+    universe, counts = load_universe(raw, settings["target_project_types"], settings)
     ids = sorted(universe) if project_ids is None else [p for p in project_ids if p in universe]
     stats = defaultdict(int)
     app_complaints: list[dict] = []
     app_actions: list[dict] = []
+    failed_blocks = failed_unit_blocks(conn)
 
     conn.execute("BEGIN")
     for i, pid in enumerate(ids, start=1):
@@ -49,15 +69,35 @@ def parse_all(conn: sqlite3.Connection, settings: dict, run_id: str | None = Non
         parser = ProjectParser(universe[pid], endpoints, run_date, now)
         try:
             res = parser.parse()
+            prow = res.rows["projects"][0]
+            up = None
+            if in_unit_scope(universe[pid], settings):
+                up = unit_parser.parse_units(pid, prow["project_category"], endpoints,
+                                             raw.load_by_prefix("project_block", "unit_list", f"{pid}|"),
+                                             failed_blocks.get(pid, set()), now)
+                res.rows["project_blocks"] = unit_parser.merge_into_blocks(
+                    pid, res.rows.get("project_blocks", []), up, unit_parser.parse_block_master(endpoints),
+                    facility_parser.parse_block_floors(endpoints))
+                res.rows["project_amenities"] = facility_parser.parse_facilities(pid, endpoints)
+                stats["amenity_rows"] += len(res.rows["project_amenities"])
+                res.rows["project_block_fetch"] = up.block_fetch
+                prow.update(up.project_fields())
         except Exception as e:  # noqa: BLE001 - one malformed project must not stop the batch
             log.exception("parse failed for project %s", pid)
             stats["parse_errors"] += 1
             repo.add_quality_note(conn, f"project:{pid}", f"parse error: {e!r}"[:300])
             continue
-        prow = res.rows["projects"][0]
         prow["list_row_hash"] = list_row_hash(universe[pid])
         repo.upsert_project(conn, prow, run_id, now)
         repo.replace_project_children(conn, pid, res.rows)
+        if up is not None:
+            stats[f"unit_state_{up.state}"] += 1
+            if up.form3:
+                repo.upsert_form3(conn, up.form3, now)
+            if up.units or up.blocks_ok:
+                for k, v in repo.upsert_units(conn, pid, up.units, up.blocks_ok, now).items():
+                    stats[f"units_{k}"] += v
+            _note_unit_reconciliation(conn, pid, prow, up)
         repo.insert_rows(conn, "developer_aliases", res.rows.get("developer_aliases", []), mode="INSERT OR IGNORE")
         repo.upsert_documents(conn, res.rows.get("project_documents", []))
         repo.upsert_provenance(conn, res.provenance)
@@ -87,6 +127,23 @@ def parse_all(conn: sqlite3.Connection, settings: dict, run_id: str | None = Non
         record_scrape_history(conn, run_id, now)
     conn.execute("COMMIT")
     return dict(stats)
+
+
+def _note_unit_reconciliation(conn: sqlite3.Connection, pid: int, prow: dict, up) -> None:
+    """Record (never "fix") disagreements between the unit rows and the other booking sources: the portal's block
+    chart (QPR-fed) and the Form 3 header can be submitted on different dates and can contain source bugs."""
+    if up.state != "complete":
+        return
+    booked = sum(u["status_norm"] == "booked" for u in up.units)
+    unbooked = sum(u["status_norm"] == "unbooked" for u in up.units)
+    chart_b, chart_u = prow.get("booked_units"), prow.get("unbooked_units")
+    if chart_b is not None and chart_u is not None and (chart_b, chart_u) != (booked, unbooked):
+        repo.add_quality_note(conn, f"project:{pid}", f"unit rows booked/unbooked {booked}/{unbooked} differ from the "
+                                                      f"portal block chart {chart_b}/{chart_u}")
+    declared = (up.form3 or {}).get("number_of_units")
+    if declared is not None and declared != len(up.units):
+        repo.add_quality_note(conn, f"project:{pid}", f"unit rows ({len(up.units)}) differ from the Form 3 header "
+                                                      f"number of units ({declared})")
 
 
 def reapply_document_fields(conn: sqlite3.Connection, project_ids: list[int] | None) -> int:
@@ -247,11 +304,22 @@ def record_universe_quality(conn: sqlite3.Connection, universe: dict, counts: di
     if res and mix and res.get("ahmedabad") == mix.get("ahmedabad"):
         repo.add_quality_note(conn, "universe", f"Dashboard grid shows identical Ahmedabad counts for Residential and "
                                                 f"Mixed ({res.get('ahmedabad')}); list endpoint used as ground truth.")
-    n_res = sum(1 for r in universe.values() if "resid" in (r.get("projectType") or "").lower())
-    n_mix = sum(1 for r in universe.values() if "mixed" in (r.get("projectType") or "").lower())
-    for name, row, n in (("Residential", res, n_res), ("Mixed", mix, n_mix)):
+    # Residential and Mixed are listed for all of Gujarat, so their dashboard total is comparable with the list rows.
+    # Commercial / Plotted are listed for the target districts only (see in_scope): compare per district instead.
+    for name, label, short in (("Residential", "Residential/Group Housing", "resid"), ("Mixed", "Mixed Development", "mixed")):
+        row = by_type.get(label)
+        n = sum(1 for r in universe.values() if short in (r.get("projectType") or "").lower())
         if row and int(row.get("total") or 0) != n:
             repo.add_quality_note(conn, "universe", f"{name}: dashboard total {row.get('total')} vs list rows {n}")
+    grid_district = {"ahmedabad": "ahmedabad", "gandhinagar": "gandhi"}
+    for label in TYPE_LABEL.values():
+        row = by_type.get(label)
+        for district, col in grid_district.items():
+            n = sum(1 for r in universe.values() if (r.get("projectType") or "") == label
+                    and (r.get("districtName") or "").strip().lower() == district)
+            if row and row.get(col) is not None and int(row[col]) != n:
+                repo.add_quality_note(conn, "universe", f"{label} / {district.title()}: dashboard grid {row[col]} vs "
+                                                        f"list rows {n}")
 
 
 def record_scrape_history(conn: sqlite3.Connection, run_id: str, now: str) -> None:

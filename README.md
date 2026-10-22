@@ -13,7 +13,9 @@ parser for the public GujRERA portal, developer and project analytics, and an Ah
 
 `gujrera_scraper/data/app/gujrera_ahmedabad.db` (SQLite, ~10 MB) is the published app snapshot the web app reads:
 
-- **4,520 projects** in Ahmedabad district (2,260 Residential/Group Housing + 2,260 Mixed Development)
+- **4,520 projects** in Ahmedabad district (2,260 Residential/Group Housing + 2,260 Mixed Development); this snapshot
+  pre-dates the Commercial / Plotted / Gandhinagar / unit-wise data, which the app supports as soon as the crawl has
+  run (see *Unit-wise booking data* below)
 - 3,880 developers, 33,654 construction-progress records, 11,853 blocks, 820 extensions, 3,681 legal records,
   13,502 project events
 - generated 2026-10-09 from the public portal https://gujrera.gujarat.gov.in/ (see the `meta` table)
@@ -23,6 +25,18 @@ larger than GitHub's file limit and contain personal contact data from raw porta
 crawler (`cli.py crawl`, see [gujrera_scraper/README.md](gujrera_scraper/README.md)). Personal emails, phone
 numbers, PANs and Aadhaar numbers in the recorded test fixtures (`gujrera_scraper/tests/fixtures`) have been replaced
 with fake values of the same shape.
+
+## Unit-wise booking data, Commercial / Plotted projects, Gandhinagar
+
+The pipeline also collects GujRERA's **Unit Wise Booking Status / Block Booking Details** (one row per unit: unit number,
+usage, carpet area, the combined exclusive balcony/veranda + open-terrace area, booking status as published, date of
+agreement) for Ahmedabad and Gandhinagar, across Residential, Mixed, Commercial and Plotted projects. Limits that come
+from the source: only the latest filing is published (no booking history), balcony and terrace areas are one figure,
+there is no per-unit floor (floors and lifts per block come from Form 1), and amounts / buyer details are not public and are never stored. Amenities come from Form 1 (common facilities with status and progress, plus any facility the promoter names, such as a club house); GujRERA has no other amenity list.
+
+All app data, including the unit-wise booking rows (table `unit_inventory`), is in ONE database: `gujrera_scraper/data/app/gujrera_ahmedabad_gandhinagar.db`, which is tracked in git (see `.gitignore`). Commands and rules:
+[gujrera_scraper/docs/scraping_strategy.md](gujrera_scraper/docs/scraping_strategy.md) and
+[data_dictionary.md](gujrera_scraper/docs/data_dictionary.md).
 
 ## Setup
 

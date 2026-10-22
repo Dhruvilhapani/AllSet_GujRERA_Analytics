@@ -114,19 +114,32 @@ class GujReraClient:
     def __exit__(self, *exc):
         self.close()
 
-    def get(self, path: str, *, store: bool = True, binary: bool = False) -> Response:
+    def get(self, path: str, *, store: bool = True, binary: bool = False, max_retries: int | None = None) -> Response:
+        return self._request("GET", path, None, store=store, binary=binary, max_retries=max_retries)
+
+    def post_json(self, path: str, body: dict, *, store: bool = True, max_retries: int | None = None) -> Response:
+        """POST a JSON body to a public read endpoint (e.g. the unit list). Same retry/backoff/rate limit as get().
+        `Response.url` is `BASE_URL + path + '#' + <body as query string>`: raw_responses.url must be unique per
+        request and the fragment is never sent to the server."""
+        return self._request("POST", path, body, store=store, binary=False, max_retries=max_retries)
+
+    def _request(self, method: str, path: str, body: dict | None, *, store: bool, binary: bool,
+                 max_retries: int | None = None) -> Response:
         path = path.lstrip("/")
         url = BASE_URL + path
+        if body is not None:
+            url += "#" + "&".join(f"{k}={body[k]}" for k in sorted(body))
         last_exc: Exception | None = None
-        for attempt in range(self.max_retries + 1):
+        retries = self.max_retries if max_retries is None else max_retries
+        for attempt in range(retries + 1):
             self.limiter.wait()
             t0 = time.monotonic()
             try:
-                r = self._client.get(path)
+                r = self._client.get(path) if method == "GET" else self._client.post(path, json=body)
                 self.stats["requests"] += 1
             except (httpx.TimeoutException, httpx.TransportError) as e:
                 last_exc = e
-                self._sleep_backoff(attempt, url, repr(e))
+                self._sleep_backoff(attempt, url, repr(e), retries=retries)
                 if isinstance(e, httpx.TransportError):
                     # connection may be poisoned; rebuild it
                     self._client.close()
@@ -137,7 +150,8 @@ class GujReraClient:
                 last_exc = FetchError(url, r.status_code, "retryable status")
                 retry_after = r.headers.get("Retry-After")
                 self._sleep_backoff(attempt, url, f"HTTP {r.status_code}",
-                                    float(retry_after) if retry_after and retry_after.isdigit() else None)
+                                    float(retry_after) if retry_after and retry_after.isdigit() else None,
+                                    retries=retries)
                 continue
             if r.status_code >= 400:
                 self.stats["errors"] += 1
@@ -157,7 +171,8 @@ class GujReraClient:
                             sha, elapsed, changed)
         self.stats["errors"] += 1
         network = isinstance(last_exc, (httpx.TimeoutException, httpx.TransportError))
-        raise FetchError(url, None, f"gave up after {self.max_retries} retries: {last_exc!r}", network=network)
+        last_status = last_exc.status if isinstance(last_exc, FetchError) else None   # e.g. a persistent HTTP 500
+        raise FetchError(url, last_status, f"gave up after {retries} retries: {last_exc!r}", network=network)
 
     def get_json(self, path: str, **kw) -> Any:
         resp = self.get(path, **kw)
@@ -166,9 +181,10 @@ class GujReraClient:
         except json.JSONDecodeError as e:
             raise FetchError(resp.url, resp.status, f"invalid JSON: {e}") from e
 
-    def _sleep_backoff(self, attempt: int, url: str, why: str, retry_after: float | None = None):
+    def _sleep_backoff(self, attempt: int, url: str, why: str, retry_after: float | None = None,
+                       retries: int | None = None):
         self.stats["retries"] += 1
-        if attempt >= self.max_retries:
+        if attempt >= (self.max_retries if retries is None else retries):
             return
         delay = retry_after if retry_after else min(self.backoff_base ** attempt, 120)
         log.warning("retry %d for %s (%s); sleeping %.1fs", attempt + 1, url, why, delay)

@@ -40,6 +40,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
             if name not in have:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ctype}")
     ref.close()
+    conn.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at, description) VALUES (?,?,?)",
+                 ("2026-10-unit-layer", utcnow(),
+                  "Commercial/Plotted categories, unit-wise booking tables, open-terrace area, infrastructure"))
 
 
 class RawStore:
@@ -96,6 +99,24 @@ class RawStore:
         except (json.JSONDecodeError, OSError):
             return None, {"id": row["id"], "url": row["url"], "fetched_at": row["fetched_at"], "invalid": True}
         return data, {"id": row["id"], "url": row["url"], "fetched_at": row["fetched_at"]}
+
+    def load_by_prefix(self, entity_type: str, endpoint_key: str, prefix: str) -> dict[str, tuple[Any, dict]]:
+        """Responses of fan-out entities whose id is '<prefix><suffix>' (e.g. unit_list of '12|A'), latest per entity.
+        Uses a range scan on ix_raw_entity: '}' is the character after '|'."""
+        out: dict[str, tuple[Any, dict]] = {}
+        hi = prefix[:-1] + chr(ord(prefix[-1]) + 1)
+        for row in self.conn.execute(
+                """SELECT id, url, entity_id, body_gz, fetched_at FROM raw_responses
+                   WHERE entity_type=? AND entity_id>=? AND entity_id<? AND endpoint_key=?
+                   ORDER BY fetched_at""", (entity_type, prefix, hi, endpoint_key)):
+            if row["body_gz"] is None:
+                continue
+            try:
+                data = json.loads(gzip.decompress(row["body_gz"]))
+            except (json.JSONDecodeError, OSError):
+                continue
+            out[row["entity_id"]] = (data, {"id": row["id"], "url": row["url"], "fetched_at": row["fetched_at"]})
+        return out
 
     def load_all_for_entity(self, entity_type: str, entity_id: Any) -> dict[str, tuple[Any, dict]]:
         out: dict[str, tuple[Any, dict]] = {}

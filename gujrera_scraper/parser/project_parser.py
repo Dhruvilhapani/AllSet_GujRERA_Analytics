@@ -221,6 +221,11 @@ class ProjectParser:
             "approving_authority": clean_str(pd.get("approvingAuthority")),
             "months_delayed_declared": to_int(pd.get("noOfMonthDelayed")),
             "last_qpr_submitted_at": q.last_submitted,
+            "portal_last_submitted_at": self._portal_last_submitted(),
+            "details_updated_on": parse_date(pd.get("updatedOn")),
+            "engineer_cert_submitted_on": parse_date(
+                (self.raw.get("form_two") or ({},))[0].get("formTwoSubmittedOn")
+                if isinstance((self.raw.get("form_two") or ({},))[0], dict) else None),
             "source_endpoint": "list+core+details",
         }
         self.r.add("projects", project)
@@ -241,6 +246,7 @@ class ProjectParser:
         self.prov("unbooked_units", inv["unbooked_units"], "block_chart", state=inv["inventory_state"])
 
         self.parse_location(pd)
+        self.parse_infrastructure(details, pd)
         self.parse_professionals(details)
         self.parse_applications(apps)
         for e in extensions:
@@ -260,6 +266,12 @@ class ProjectParser:
         return self.r
 
     # ------------------------------------------------------------------ sections
+    def _portal_last_submitted(self) -> str | None:
+        """'2019-04-05 16:00:58.0' -> '2019-04-05 16:00:58' (None when the portal answers status 300 / no date)."""
+        v = _data(self.raw, "last_submitted")
+        s = clean_str(v) if isinstance(v, str) else None
+        return s.split(".")[0] if s and parse_date(s) else None
+
     def parse_inventory(self, details: dict, qd: dict) -> dict:
         us = _data(self.raw, "unit_summary")
         us0 = us[0] if isinstance(us, list) and us else {}
@@ -292,7 +304,9 @@ class ProjectParser:
                     "units_booked_declared": to_int(it.get("noOfInventoryBooked")),
                     "units_completed_declared": to_int(it.get("noOfInventoryCompleted")),
                     "carpet_area_sqm": to_float(it.get("carpetArea")),
-                    "exclusive_area_sqm": to_float(it.get("areaOfExclusive")), "source_endpoint": "details"})
+                    "exclusive_area_sqm": to_float(it.get("areaOfExclusive")),
+                    "open_terrace_area_sqm": to_float(it.get("areaOfExclusiveOpenTerrace")),
+                    "source_endpoint": "details"})
                 if n is not None:
                     have_types = True
                     if cls == "residential":
@@ -400,6 +414,49 @@ class ProjectParser:
             "latitude": lat, "longitude": lon, "polygon_points": len(coords) or None,
             "source_endpoint": "details+location",
         })
+
+    # fields of projectDetail / dev[] that describe water, sewage and near-by facilities (names are the portal's)
+    _NEARBY = ("airportDistance", "ulbServiceDelivery", "publicTransit", "publicGarden", "policeStation",
+               "mainRailwayStation", "multiSpecialityHospital", "fireStation")
+    _WATER_SEWAGE = ("waterLevel", "waterSplyFlag", "waterSplyFromSource", "waterSplyFromOther", "resDrinkWaterReq",
+                     "comDrinkWaterReq", "totalDrinkWaterReq", "resDrinkWaterProps", "comDrinkWaterProps",
+                     "totalDrinkWaterProps", "totalwaterPropsPercen", "resQuantySew", "comQuantySew", "totalQuantySew",
+                     "seawageDisDistance", "sewDisposalFlag", "sewPrjTreatPrjSource", "sewPrjTreatOther",
+                     "sewRecEfflTreat", "sewRecEfflTreatFlag", "sewSolidWasteSource", "sewSolidWasteOther",
+                     "sewSwimCapacityFlag", "sewSwimCapLenght", "sewSwimCapBreadth", "sewSwimCapHeight",
+                     "sewSwimCapLiter")
+
+    def parse_infrastructure(self, details: dict, pd: dict) -> None:
+        """External development ("developed by"), water/sewage and near-by facilities as declared at registration.
+        The public API has no structured gym/pool style amenity list; nothing is invented here."""
+        seen: set[tuple[str, str]] = set()
+
+        def add(category: str, name: str, value) -> None:
+            v = clean_str(value) if not isinstance(value, (dict, list)) else None
+            if v is None or (category, name) in seen:
+                return
+            seen.add((category, name))
+            self.r.add("project_infrastructure", {"project_id": self.pid, "category": category, "name": name,
+                                                  "value": v, "source_endpoint": "details"})
+
+        for name in self._NEARBY:
+            add("nearby", _camel_to_snake(name), pd.get(name))
+        for dev in details.get("dev") or []:
+            ext = dev.get("externalDev")
+            if isinstance(ext, dict):
+                for k, v in ext.items():
+                    if k.endswith("Id") or k == "extOtherDevSet":
+                        continue
+                    add("external_development", _camel_to_snake(k), v)
+                for i, other in enumerate(ext.get("extOtherDevSet") or [], start=1):
+                    if isinstance(other, dict):
+                        desc = " | ".join(f"{_camel_to_snake(k)}: {clean_str(v)}" for k, v in other.items()
+                                          if clean_str(v) and not k.endswith("Id"))
+                        add("other_development", f"item_{i}", desc or None)
+            for name in self._WATER_SEWAGE:
+                add("water_sewage", _camel_to_snake(name), dev.get(name))
+        for name in self._WATER_SEWAGE:   # some projects carry these on projectDetail instead of dev[]
+            add("water_sewage", _camel_to_snake(name), pd.get(name))
 
     def parse_professionals(self, details: dict) -> None:
         seen = set()
@@ -578,6 +635,8 @@ def _uid(v) -> str | None:
 
 
 def category_of(project_type: str | None) -> str | None:
+    """residential | mixed | commercial | plotted (portal labels: Residential/Group Housing, Mixed Development,
+    Commercial, Plotted Development). Unknown labels pass through lower-cased."""
     if not project_type:
         return None
     t = project_type.lower()
@@ -585,6 +644,10 @@ def category_of(project_type: str | None) -> str | None:
         return "mixed"
     if "resid" in t:
         return "residential"
+    if "commerc" in t:
+        return "commercial"
+    if "plot" in t:
+        return "plotted"
     return t
 
 

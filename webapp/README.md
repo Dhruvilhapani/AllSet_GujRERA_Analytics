@@ -41,7 +41,11 @@ cd ..
 
 Frontend development with hot reload: `npm run dev` in `webapp/frontend` (http://localhost:5180, proxies `/api` to :8600).
 
-`RERA_APP_DB` overrides the snapshot path (default `gujrera_scraper/data/app/gujrera_ahmedabad.db`).
+`RERA_APP_DB` overrides the snapshot path (default: `gujrera_scraper/data/app/gujrera_ahmedabad_gandhinagar.db` when it
+exists, otherwise `gujrera_ahmedabad.db`). That one file holds everything, including the unit-wise booking rows (table
+`unit_inventory`); on an older snapshot without that table the app works and the Blocks & units tab says the data is not
+part of the build.
+Snapshots published before the multi-city layout keep working (`city` falls back to the district).
 
 ## Pages
 
@@ -52,14 +56,32 @@ Frontend development with hot reload: `npm run dev` in `webapp/frontend` (http:/
 - **Developer** `/developers/:id`, in this order: header, 6 KPIs, project progress by year, project table (units / sold /
   remaining / sales % / progress per project), sales % by project + highlights, construction status, extensions and
   delayed projects (kept separate), legal (expandable records + timeline), locations, growth.
-- **Project** `/projects/:id`: details, units, construction, approved extensions, progress history, legal records.
+- **Global search** (top bar on every page, press `/` to focus): live suggestions for projects (name or RERA no.), developers
+  (name or alias) and localities; every word must match, in any order; arrows + Enter or click to open, Enter alone lists
+  every matching project (`/projects?q=…`).
+- **Projects** `/projects`: all projects, filter by city / category / status / locality, search project or developer.
+- **Project** `/projects/:id` (tabs, kept in `?tab=`): Overview · Developer · Location & map · Amenities & infrastructure (Form 1 facilities with status and progress, promoter-named amenities, parking, external development) ·
+  Construction & approvals (extensions, progress, certificates, Form 3, complaints, timeline) · Blocks & units (block
+  cards; a **block grid** of every unit as a booked / unbooked tile with its agreement date and a click-through detail panel;
+  and the unit-wise booking table with unit-number search and status / usage filters, server-paginated).
 
 Every metric is computed on the server (`webapp/server/analytics.py`, pandas / NumPy) and defined in
 [METRICS.md](METRICS.md). The frontend only lays the numbers out.
 
 ## API
 
-`GET /api/meta`, `/api/dashboard`, `/api/developers`, `/api/developers/{id}`, `/api/projects/{id}` (docs at `/api/docs`).
+`GET /api/meta`, `/api/dashboard?city&category`, `/api/developers?city&category&…`, `/api/developers/{id}`,
+`/api/search?q=&limit=` (projects, developers, localities), `/api/projects?q&city&category&status&developer&locality&sort_by&page&page_size` (page_size up to 10,000), `/api/projects/{id}`,
+`/api/projects/{id}/blocks`, `/api/projects/{id}/units?block&q&status&usage&sort_by&page&page_size` (docs at `/api/docs`).
+
+## Map
+
+The Location & map tab uses Leaflet (loaded on demand) and puts a red pin at the project location from GujRERA's map record over
+**satellite imagery (default; Esri World Imagery with place labels)** or the OpenStreetMap street map, switchable on the
+map. The base maps are the only third-party requests the app makes: `server.arcgisonline.com` and
+`tile.openstreetmap.org` see the viewer's IP address and the map area requested. Keep the on-map attributions; heavy or
+commercial use needs your own tile provider / licence (Esri and OSM terms). Change the sources at the top of
+`frontend/src/components/MapView.jsx`.
 
 ## Data rules
 

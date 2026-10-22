@@ -5,6 +5,7 @@ import { defineConfig } from 'vite'
 // API serves the built files itself, so /api is always same-origin.
 export default defineConfig({
   plugins: [react()],
+  test: { environment: 'jsdom', globals: true, include: ['src/**/*.test.{js,jsx}'] },
   server: {
     port: 5180,
     proxy: { '/api': 'http://127.0.0.1:8600' },

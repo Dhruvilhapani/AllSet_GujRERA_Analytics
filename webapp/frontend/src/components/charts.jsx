@@ -11,7 +11,8 @@ import { fmtInt, fmtPct } from '../lib/format.js'
 
 import { Card, Empty } from './ui.jsx'
 
-export const SERIES = ['#2a78d6', '#eb6834']
+// Categorical marks, in category order (residential, mixed, commercial, plotted); always paired with a legend label.
+export const SERIES = ['#2a78d6', '#eb6834', '#1f9d8b', '#6941c6']
 const RAMP = ['#86b6ef', '#5598e7', '#2a78d6', '#1c5cab', '#104281', '#0d366b']
 const SURFACE = '#ffffff'
 const GRID = { stroke: '#e9ecf0', strokeDasharray: '0', vertical: false }

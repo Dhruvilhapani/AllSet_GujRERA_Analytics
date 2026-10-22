@@ -25,7 +25,7 @@ from pathlib import Path
 import pandas as pd
 
 from analytics import area_report as ar
-from database.db import utcnow
+from database.db import RawStore, utcnow
 
 SCHEMA = """
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
@@ -33,6 +33,7 @@ CREATE TABLE developers (
     developer_id INTEGER PRIMARY KEY, name TEXT NOT NULL, name_search TEXT, entity_type TEXT,
     promoter_account_ids TEXT, merge_basis TEXT, declared_group_name TEXT, aliases TEXT, similar_names TEXT,
     projects_total INTEGER, projects_analyzed INTEGER, residential_projects INTEGER, mixed_projects INTEGER,
+    commercial_projects INTEGER, plotted_projects INTEGER,
     completed INTEGER, ongoing INTEGER, delayed INTEGER, pending INTEGER, past_original INTEGER, overdue INTEGER,
     stalled INTEGER,
     near_completion INTEGER, extended_projects INTEGER, total_extensions INTEGER, repeated_extensions INTEGER,
@@ -42,7 +43,11 @@ CREATE TABLE developers (
     delay_rate_pct REAL, complaints_total INTEGER, complaints_pending INTEGER, complaints_resolved INTEGER,
     rera_complaints INTEGER, adjudication_complaints INTEGER, suo_motu INTEGER, penalty_orders INTEGER,
     challans INTEGER, challan_amount REAL, regulatory_actions INTEGER, localities TEXT, talukas TEXT,
-    first_registration_year INTEGER, last_registration_year INTEGER
+    first_registration_year INTEGER, last_registration_year INTEGER,
+    -- company details of the primary promoter account (business information only: no phone, e-mail, PAN, Aadhaar)
+    registration_status TEXT, company_reg_number TEXT, date_of_incorporation TEXT, registered_address TEXT,
+    website TEXT, declared_total_projects INTEGER, declared_completed_projects INTEGER,
+    declared_ongoing_projects INTEGER, declared_experience_years TEXT, associates TEXT
 );
 CREATE TABLE projects (
     project_id INTEGER PRIMARY KEY, developer_id INTEGER, name TEXT, name_search TEXT, rera_number TEXT,
@@ -56,13 +61,46 @@ CREATE TABLE projects (
     sold_units INTEGER, unsold_units INTEGER, sales_pct REAL, residential_units INTEGER, commercial_units INTEGER,
     total_land_area_sqm REAL, total_carpet_area_sqm REAL, total_project_cost REAL, min_unit_cost REAL,
     max_unit_cost REAL, complaints_total INTEGER, complaints_pending INTEGER, suo_motu INTEGER, challans INTEGER,
-    challan_amount REAL, detail_crawled INTEGER, source_url TEXT, last_checked TEXT
+    challan_amount REAL, detail_crawled INTEGER, source_url TEXT, last_checked TEXT,
+    city TEXT, unit_data_state TEXT, unit_data_note TEXT, units_row_count INTEGER, units_as_of TEXT,
+    units_scraped_at TEXT, total_open_area_sqm REAL, total_covered_area_sqm REAL, parking_for_sale INTEGER,
+    covered_parking INTEGER, garages_for_sale INTEGER,
+    project_description TEXT, planning_authority TEXT, tp_number TEXT, tp_name TEXT, fp_number TEXT,
+    survey_number TEXT, city_survey_number TEXT, village_moje TEXT,
+    last_rera_update TEXT, last_rera_update_kind TEXT, portal_last_submitted_at TEXT,
+    first_seen_at TEXT, last_changed_at TEXT
 );
 CREATE INDEX ix_projects_developer ON projects(developer_id);
+CREATE INDEX ix_projects_city_category ON projects(city, category, status);
+CREATE INDEX ix_projects_locality ON projects(city, locality);
+CREATE TABLE meta_counts (city TEXT, category TEXT, total INTEGER, analyzed INTEGER, PRIMARY KEY (city, category));
 CREATE TABLE project_progress (project_id INTEGER, seq INTEGER, quarter_label TEXT, period_date TEXT,
                                progress_pct REAL, PRIMARY KEY (project_id, seq));
+-- sold_units / unsold_units = the portal's block booking chart (QPR-fed). unit_* = counted from the unit rows of the
+-- latest Form 3. The two sources can disagree; both are published, never merged.
 CREATE TABLE project_blocks (project_id INTEGER, block_name TEXT, planned_units INTEGER, sold_units INTEGER,
-                             unsold_units INTEGER, progress_pct REAL, PRIMARY KEY (project_id, block_name));
+                             unsold_units INTEGER, progress_pct REAL, unit_rows INTEGER, unit_booked INTEGER,
+                             unit_unbooked INTEGER, unit_other INTEGER, fetch_outcome TEXT, height REAL, fsi REAL,
+                             builtup_area_sqm REAL, dev_start_date TEXT, dev_end_date TEXT, floors INTEGER, lifts INTEGER,
+                             PRIMARY KEY (project_id, block_name));
+CREATE TABLE project_form3 (project_id INTEGER, form_three_id INTEGER, submitted_on TEXT, number_of_units INTEGER,
+                            booked_declared INTEGER, unbooked_declared INTEGER, total_residential INTEGER,
+                            total_shop INTEGER, total_office INTEGER, total_others INTEGER, is_latest INTEGER,
+                            PRIMARY KEY (project_id, form_three_id));
+-- Facilities / amenities declared in Form 1: applicable YES/NO, % work done, planned / actual dates. A facility that is
+-- not listed was not declared (not "absent").
+CREATE TABLE project_amenities (project_id INTEGER, item_key TEXT, label TEXT, category TEXT, source TEXT,
+                                applicable TEXT, progress_pct REAL, planned_start TEXT, planned_end TEXT,
+                                actual_start TEXT, actual_end TEXT, remarks TEXT, form1_submitted_on TEXT,
+                                PRIMARY KEY (project_id, item_key));
+CREATE TABLE project_infrastructure (project_id INTEGER, category TEXT, name TEXT, value TEXT,
+                                     PRIMARY KEY (project_id, category, name));
+CREATE TABLE project_documents (project_id INTEGER, document_type TEXT, document_name TEXT, document_date TEXT,
+                                url TEXT);
+CREATE INDEX ix_docs_project ON project_documents(project_id);
+CREATE TABLE project_polygon (project_id INTEGER, seq INTEGER, lat REAL, lng REAL, PRIMARY KEY (project_id, seq));
+CREATE TABLE project_professionals (project_id INTEGER, role TEXT, name TEXT);
+CREATE INDEX ix_prof_project ON project_professionals(project_id);
 CREATE TABLE project_legal (project_id INTEGER, record_type TEXT, reference TEXT, category TEXT, subtype TEXT,
                             filed_date TEXT, order_date TEXT, status TEXT, outcome TEXT, penalty_amount REAL,
                             order_url TEXT);
@@ -76,6 +114,15 @@ CREATE TABLE project_extensions (project_id INTEGER, seq INTEGER, extension_reg_
                                  approved_on TEXT, status TEXT, previous_completion_date TEXT,
                                  extended_completion_date TEXT, extension_days INTEGER,
                                  PRIMARY KEY (project_id, seq));
+-- One row per unit of the latest Form 3 (is_current = 1): the Unit Wise Booking Status. No personal data, no amounts.
+CREATE TABLE unit_inventory (
+    project_id INTEGER NOT NULL, block_name TEXT NOT NULL, unit_no TEXT, unit_no_norm TEXT NOT NULL,
+    dup_seq INTEGER NOT NULL, unit_sort TEXT, unit_kind TEXT, usage TEXT, usage_class TEXT, carpet_area_sqm REAL,
+    area_excl_balcony_terrace_sqm REAL, status TEXT, status_norm TEXT, agreement_date TEXT, encumbrance_status TEXT,
+    redeveloped TEXT, form3_submitted_on TEXT, last_changed_at TEXT,
+    PRIMARY KEY (project_id, block_name, unit_no_norm, dup_seq)
+) WITHOUT ROWID;
+CREATE INDEX ix_unit_sort ON unit_inventory(project_id, block_name, unit_sort, dup_seq);
 """
 
 # execution_category -> normalized status shown in the app. Delayed means past the latest approved completion
@@ -129,9 +176,12 @@ def crawl_status(conn: sqlite3.Connection) -> dict:
     return {"state": state, "last_fetch": last}
 
 
-def publish(conn: sqlite3.Connection, settings: dict, district: str, out_path: str | Path,
+def publish(conn: sqlite3.Connection, settings: dict, district: str | list[str], out_path: str | Path,
             live_status: dict | None = None) -> dict:
-    p, _res = ar.scope_projects(conn, settings, district)
+    """`district`: one district name or a list (e.g. ['Ahmedabad', 'Gandhinagar'] -> one merged snapshot)."""
+    districts = [district] if isinstance(district, str) else list(district)
+    p, _res = ar.scope_projects(conn, settings, districts)
+    p["city"] = p["district"].map(lambda x: " ".join(str(x).split()).title() if isinstance(x, str) and x.strip() else None)
     entity, devs, review = ar.resolve_entities(conn, set(p["developer_id"].dropna().astype(int)))
     p["entity_id"] = p["developer_id"].map(lambda x: entity.get(int(x)) if pd.notna(x) else None)
     d = ar.developer_table(p, devs, conn)
@@ -154,26 +204,40 @@ def publish(conn: sqlite3.Connection, settings: dict, district: str, out_path: s
 
     cr = p[p["detail_crawled"] == 1]
     status = live_status or crawl_status(conn)
+    cities = sorted(c for c in p["city"].dropna().unique())
+    present = [c for c in CATEGORY_ORDER if (p["project_category"] == c).any()]
     meta = {
-        "district": district, "generated_at": utcnow(), "data_checked_at": status.get("last_fetch"),
+        "district": " + ".join(cities) if cities else ", ".join(districts),
+        "districts": json.dumps(cities), "categories": json.dumps(present),
+        "generated_at": utcnow(), "data_checked_at": status.get("last_fetch"),
         "crawl_state": status["state"], "projects_total": len(p), "projects_analyzed": len(cr),
         "projects_pending": len(p) - len(cr), "dataset_complete": int(len(cr) == len(p)),
         "residential_total": int((p["project_category"] == "residential").sum()),
         "mixed_total": int((p["project_category"] == "mixed").sum()),
+        "commercial_total": int((p["project_category"] == "commercial").sum()),
+        "plotted_total": int((p["project_category"] == "plotted").sum()),
         "developers_identified": int(cr["entity_id"].nunique()),
-        "scope": "GujRERA registered Residential/Group Housing + Mixed Development projects",
+        "scope": "GujRERA registered projects: " + ", ".join(CATEGORY_LABELS[c] for c in present),
         "source": "https://gujrera.gujarat.gov.in/ (public project records)",
     }
     o.executemany("INSERT INTO meta VALUES (?,?)", [(k, None if v is None else str(v)) for k, v in meta.items()])
+    for (city, cat), g in p.groupby(["city", "project_category"]):
+        o.execute("INSERT INTO meta_counts VALUES (?,?,?,?)", (city, cat, len(g), int((g["detail_crawled"] == 1).sum())))
 
     _write_developers(o, conn, p, d, entity, review)
     _write_projects(o, conn, p, ids)
     for r in conn.execute(f"SELECT project_id, seq, quarter_label, period_date, physical_progress_pct "
                           f"FROM project_progress WHERE project_id IN ({idlist})"):
         o.execute("INSERT INTO project_progress VALUES (?,?,?,?,?)", tuple(r))
-    for r in conn.execute(f"SELECT project_id, block_name, planned_units, booked_units, unbooked_units, progress_pct "
-                          f"FROM project_blocks WHERE project_id IN ({idlist})"):
-        o.execute("INSERT OR IGNORE INTO project_blocks VALUES (?,?,?,?,?,?)", tuple(r))
+    outcomes = {(r[0], r[1]): r[2] for r in conn.execute(
+        f"SELECT project_id, block_name, outcome FROM project_block_fetch WHERE project_id IN ({idlist})")}
+    for r in conn.execute(f"""SELECT project_id, block_name, planned_units, booked_units, unbooked_units, progress_pct,
+                                     unit_rows, unit_booked, unit_unbooked, unit_other, height, fsi, builtup_area_sqm,
+                                     dev_start_date, dev_end_date, floors, lifts FROM project_blocks
+                              WHERE project_id IN ({idlist})"""):
+        o.execute("INSERT OR IGNORE INTO project_blocks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  tuple(r[:10]) + (outcomes.get((r[0], r[1])),) + tuple(r[10:]))
+    _write_unit_side_tables(o, conn, p, idlist)
     o.executemany(
         "INSERT OR IGNORE INTO project_extensions VALUES (?,?,?,?,?,?,?,?,?)",
         conn.execute(f"""SELECT project_id, extension_seq, extension_reg_no, submitted_on, approved_on, status,
@@ -181,10 +245,81 @@ def publish(conn: sqlite3.Connection, settings: dict, district: str, out_path: s
                          FROM project_extensions WHERE project_id IN ({crawled_list})""").fetchall(),
     )
     n_legal, n_events = _write_legal_and_events(o, conn, p, crawled_list)
+    n_units = _write_units(o, conn, idlist)
+    today = utcnow()[:10]
+    o.execute("""UPDATE projects SET
+        last_rera_update = (SELECT MAX(e.event_date) FROM project_events e
+                            WHERE e.project_id = projects.project_id AND e.event_date <= ?),
+        last_rera_update_kind = (SELECT e.event_type FROM project_events e
+                                 WHERE e.project_id = projects.project_id AND e.event_date <= ?
+                                 ORDER BY e.event_date DESC, e.rowid DESC LIMIT 1)""", (today, today))
     o.commit()
     o.close()
     _replace(tmp, out_path)
-    return {**meta, "file": str(out_path), "developers": len(d), "legal_records": n_legal, "events": n_events}
+    return {**meta, "file": str(out_path), "unit_rows": n_units, "developers": len(d), "legal_records": n_legal,
+            "events": n_events}
+
+
+CATEGORY_ORDER = ("residential", "mixed", "commercial", "plotted")
+CATEGORY_LABELS = {"residential": "Residential/Group Housing", "mixed": "Mixed Development",
+                   "commercial": "Commercial", "plotted": "Plotted Development"}
+# document types published to the app (official certificates / filings; the portal serves them publicly)
+PUBLIC_DOC_TYPES = ("registration_certificate", "extension_certificate", "completion_certificate", "qe_form_four",
+                    "qe_form_five", "project_cert_upload", "declaration_form_b", "engineer_certificate_form2")
+
+
+def _write_unit_side_tables(o, conn, p, idlist) -> None:
+    """Form 3 headers, infrastructure, professionals (role + name only), public documents and map polygons."""
+    o.executemany("INSERT OR IGNORE INTO project_form3 VALUES (?,?,?,?,?,?,?,?,?,?,?)", conn.execute(
+        f"""SELECT project_id, form_three_id, submitted_on, number_of_units, booked_declared, unbooked_declared,
+                   total_residential, total_shop, total_office, total_others, is_latest
+            FROM project_form3 WHERE project_id IN ({idlist})""").fetchall())
+    o.executemany("INSERT OR IGNORE INTO project_amenities VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", conn.execute(
+        f"""SELECT project_id, item_key, label, category, source, applicable, progress_pct, planned_start, planned_end,
+                   actual_start, actual_end, remarks, form1_submitted_on
+            FROM project_amenities WHERE project_id IN ({idlist})""").fetchall())
+    o.executemany("INSERT OR IGNORE INTO project_infrastructure VALUES (?,?,?,?)", conn.execute(
+        f"SELECT project_id, category, name, value FROM project_infrastructure WHERE project_id IN ({idlist})").fetchall())
+    o.executemany("INSERT INTO project_professionals VALUES (?,?,?)", conn.execute(
+        f"SELECT project_id, role, name FROM project_professionals WHERE project_id IN ({idlist})").fetchall())
+    types = ",".join(f"'{t}'" for t in PUBLIC_DOC_TYPES)
+    o.executemany("INSERT INTO project_documents VALUES (?,?,?,?,?)", conn.execute(
+        f"""SELECT project_id, document_type, document_name, document_date, download_url FROM project_documents
+            WHERE project_id IN ({idlist}) AND document_type IN ({types}) AND download_url IS NOT NULL""").fetchall())
+    wanted = {int(x) for x in idlist.split(",") if x}
+    from parser.common import to_float
+    for eid, j, _meta in RawStore(conn).iter_endpoint("location"):
+        if not eid.isdigit() or int(eid) not in wanted or not isinstance(j, dict):
+            continue
+        pts = [(to_float(c.get("lat")), to_float(c.get("lang"))) for c in j.get("coordinates") or []]
+        pts = [(a, b) for a, b in pts if a and b and 20 < a < 25 and 68 < b < 75]   # Gujarat bounding box
+        o.executemany("INSERT OR IGNORE INTO project_polygon VALUES (?,?,?,?)",
+                      [(int(eid), i, a, b) for i, (a, b) in enumerate(pts)])
+
+
+def natural_sort_key(label: str) -> str:
+    """'a-101' < 'a-1001': digit runs are zero-padded so a plain TEXT ORDER BY sorts naturally."""
+    import re
+    return re.sub(r"\d+", lambda m: m.group().zfill(8), label or "")
+
+
+def _write_units(o: sqlite3.Connection, conn, idlist: str) -> int:
+    """Current unit rows (is_current = 1) of the published projects into the same snapshot file.
+    No personal data and no amounts: the pipeline never stores them."""
+    n = 0
+    cur = conn.execute(f"""SELECT project_id, block_name, unit_no_raw, unit_no_norm, dup_seq, unit_kind, usage_raw,
+                                  usage_class, carpet_area_sqm, area_excl_balcony_terrace_sqm, status_source,
+                                  status_norm, agreement_date, encumbrance_status, redeveloped_flag,
+                                  form3_submitted_on, last_changed_at
+                           FROM project_unit_inventory WHERE is_current=1 AND project_id IN ({idlist})""")
+    while True:
+        rows = cur.fetchmany(20000)
+        if not rows:
+            break
+        o.executemany("INSERT INTO unit_inventory VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                      [(r[0], r[1], r[2], r[3], r[4], natural_sort_key(r[3])) + tuple(r[5:]) for r in rows])
+        n += len(rows)
+    return n
 
 
 def _replace(tmp: Path, out_path: Path) -> None:
@@ -227,6 +362,7 @@ def _write_developers(o, conn, p, d, entity, review) -> None:
             "similar_names": json.dumps(similar.get(r["entity_id"], [])),
             "projects_total": r["projects"], "projects_analyzed": r["projects_analyzed"],
             "residential_projects": r["residential_projects"], "mixed_projects": r["mixed_projects"],
+            "commercial_projects": r["commercial_projects"], "plotted_projects": r["plotted_projects"],
             "extended_projects": _v(r["extended"]) if analysed else None,
             "suo_motu": _v(r["suo_motu_proceedings"]) if analysed else None,
             "units": _v(r["units"]) if analysed else None,
@@ -240,6 +376,14 @@ def _write_developers(o, conn, p, d, entity, review) -> None:
             "first_registration_year": int(yrs.min()) if len(yrs) else None,
             "last_registration_year": int(yrs.max()) if len(yrs) else None,
         }
+        primary = conn.execute(
+            "SELECT registration_status, company_reg_number, date_of_incorporation, registered_address, website, "
+            "declared_total_projects, declared_completed_projects, declared_ongoing_projects, "
+            "declared_experience_years, associate_names FROM developers WHERE developer_id = ?",
+            (row["developer_id"],)).fetchone()
+        if primary is not None:   # entity id = lowest promoter account id = the primary account
+            row.update({k: primary[k] for k in primary.keys() if k != "associate_names"})
+            row["associates"] = primary["associate_names"]            # JSON list of names, no other personal data
         for k in DEV_ANALYSED_ONLY:
             row[k] = _v(r[k]) if analysed else None
         # Status counts use the app's status (same rule as projects.status); area_report's `delayed` (past the
@@ -291,10 +435,67 @@ def _write_projects(o, conn, p, ids) -> None:
             "complaints_pending": _v(r["complaints_pending"]), "suo_motu": _v(r["suo_motu_total"]),
             "challans": _v(r["challans_total"]), "challan_amount": _v(r["challan_amount_total"]),
             "detail_crawled": int(crawled), "source_url": url, "last_checked": checked,
+            "city": r["city"], "unit_data_state": r.get("unit_data_state"), "unit_data_note": r.get("unit_data_note"),
+            "units_row_count": _v(r.get("units_row_count")), "units_as_of": r.get("units_form3_submitted_on"),
+            "units_scraped_at": r.get("units_scraped_at"),
+            "total_open_area_sqm": _v(r.get("total_open_area_sqm")),
+            "total_covered_area_sqm": _v(r.get("total_covered_area_sqm")),
+            "parking_for_sale": _v(r.get("parking_for_sale")), "covered_parking": _v(r.get("covered_parking")),
+            "garages_for_sale": _v(r.get("garages_for_sale")), "project_description": r.get("description"),
+            "planning_authority": r.get("planning_authority"), "tp_number": r.get("tp_number"),
+            "tp_name": r.get("tp_name"), "fp_number": r.get("fp_number"), "survey_number": r.get("survey_number"),
+            "city_survey_number": r.get("city_survey_number"), "village_moje": r.get("village_moje"),
+            "portal_last_submitted_at": r.get("portal_last_submitted_at"),
+            "first_seen_at": r.get("first_seen_at"), "last_changed_at": r.get("last_changed_at"),
         }
+        for k, v in list(row.items()):   # NaN / numpy -> None
+            row[k] = _v(v)
         for k in DETAIL_ONLY:  # detail-only fields stay NULL until the project is crawled
             row[k] = _v(r.get(k)) if crawled else None
         _insert(o, "projects", row)
+
+
+# Filings and updates that show a project was updated on GujRERA (kind -> title). The date is the one GujRERA publishes
+# (submission / approval / order date), never the date this app collected it.
+FILING_TITLES = {
+    "portal_submission": "Latest filing recorded on GujRERA",
+    "qpr": "Quarterly progress report (QPR) submitted",
+    "unit_booking": "Unit-wise booking status filed (Form 3)",
+    "facilities": "Facilities and construction progress filed (Form 1)",
+    "engineer_certificate": "Engineer's certificate filed (Form 2)",
+    "details_updated": "Project details updated by the promoter",
+}
+
+
+def _day(v) -> str | None:
+    s = str(v)[:10] if v not in (None, "") and not (isinstance(v, float) and v != v) else None
+    return s if s and len(s) == 10 and s[4] == "-" and s[7] == "-" else None
+
+
+def _filing_events(conn, p, idlist_all: str) -> list[tuple]:
+    """(project_id, date, kind, title, detail, reference) for every filing date GujRERA publishes for a project."""
+    out: dict[tuple, tuple] = {}
+
+    def add(pid, date, kind, detail=None, reference=None):
+        d = _day(date)
+        if d:
+            out.setdefault((pid, d, kind), (pid, d, kind, FILING_TITLES[kind], detail, reference))
+
+    for r in p.to_dict("records"):
+        pid = int(r["project_id"])
+        add(pid, r.get("portal_last_submitted_at"), "portal_submission")
+        add(pid, r.get("last_qpr_submitted_at"), "qpr", r.get("latest_progress_quarter"))
+        add(pid, r.get("details_updated_on"), "details_updated")
+        add(pid, r.get("engineer_cert_submitted_on"), "engineer_certificate")
+    for pid, submitted, n in conn.execute(
+            f"SELECT project_id, submitted_on, number_of_units FROM project_form3 WHERE is_latest=1 "
+            f"AND project_id IN ({idlist_all})"):
+        add(pid, submitted, "unit_booking", None if n is None else f"{n} units declared")
+    for pid, submitted in conn.execute(
+            f"SELECT project_id, MAX(form1_submitted_on) FROM project_amenities WHERE project_id IN ({idlist_all}) "
+            f"GROUP BY project_id"):
+        add(pid, submitted, "facilities")
+    return list(out.values())
 
 
 def _write_legal_and_events(o, conn, p, crawled_list) -> tuple[int, int]:
@@ -323,6 +524,7 @@ def _write_legal_and_events(o, conn, p, crawled_list) -> tuple[int, int]:
                               WHERE project_id IN ({crawled_list})"""):
         legal.append((r[0], "appeal_name_matched", r[1], r[2], None, None, r[3], None, r[4], None, None))
     o.executemany("INSERT INTO project_legal VALUES (?,?,?,?,?,?,?,?,?,?,?)", legal)
+    events.extend(_filing_events(conn, p, idlist_all=",".join(str(int(x)) for x in p["project_id"]) or "0"))
     for r in p.to_dict("records"):
         if r["registration_date"]:
             events.append((int(r["project_id"]), r["registration_date"], "registration", "Registered with GujRERA",

@@ -14,7 +14,7 @@ import {
 import { DatasetStatus, Kpis, LoadError, Page, PageHeader, SkeletonRows } from '../components/ui.jsx'
 import { getDeveloper } from '../lib/api.js'
 import { useDataVersion } from '../lib/dataVersion.jsx'
-import { fmtInt, fmtPct } from '../lib/format.js'
+import { CATEGORY_LABEL, fmtInt, fmtPct } from '../lib/format.js'
 import useFetch from '../lib/useFetch.js'
 
 export default function DeveloperDetailPage() {
@@ -52,8 +52,8 @@ export default function DeveloperDetailPage() {
         back={back}
         title={dev.name}
         subtitle={[
-          meta?.district || 'Ahmedabad',
-          [dev.residential_projects ? 'Residential' : null, dev.mixed_projects ? 'Mixed-use' : null].filter(Boolean).join(' / ') || null,
+          meta?.district || 'GujRERA',
+          ['residential', 'mixed', 'commercial', 'plotted'].filter(c => dev[`${c}_projects`]).map(c => CATEGORY_LABEL[c]).join(' / ') || null,
           dev.entity_type,
           dev.first_registration_year ? `registering with GujRERA since ${dev.first_registration_year}` : null,
         ].filter(Boolean).join(' · ')}
