@@ -32,8 +32,22 @@ python cli.py analyze                  # metrics + risk score
 python cli.py export                   # CSV / Excel / executive report
 python cli.py status                   # progress, failures, table counts
 python cli.py crawl --mode incremental # later runs: only new / changed projects get a full refresh
+python cli.py backfill-units           # unit-wise booking layer (Ahmedabad + Gandhinagar), resumable
+python cli.py coverage-report          # CSV: unit-data state per project and why it is incomplete
+python cli.py verify-units --sample 30 # compare random complete projects with the live portal
+python cli.py refresh-app --districts Ahmedabad Gandhinagar   # the one app database (units included) + coverage CSV
 python -m pytest tests                 # unit tests (offline, use saved fixtures)
 ```
+
+One-shot full scrape of Ahmedabad + Gandhinagar (all four categories, units, facilities), resumable, ~10 h at 2.5 req/s:
+`powershell -ExecutionPolicy Bypass -File run
+un_scrape_all.ps1` (backs up the crawl DB, fetches only what is missing,
+retries failures, then publishes the app snapshot + unit rows + `exports/unit_data_coverage.csv`). Run it again after an
+interruption; progress: `python cli.py status` and `data/pipeline.log`.
+
+Scope (`config/settings.yaml`): Residential and Mixed are crawled for all of Gujarat; Commercial and Plotted only for
+`target_districts`; the unit layer only for `units.districts`. See `docs/scraping_strategy.md` for moving an existing
+crawl onto the new scope and `docs/data_dictionary.md` for the unit-wise fields and their limits.
 
 `parse`, `analyze` and `export` can be run at any time during a crawl; projects not yet crawled appear with list
 data only (`detail_crawled = 0`, counts NULL, status `unknown`).

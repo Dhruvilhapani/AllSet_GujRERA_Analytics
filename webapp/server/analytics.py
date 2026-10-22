@@ -580,6 +580,7 @@ def developer_report(developer_id: int, as_of: date | None = None) -> dict | Non
                 "projects_analyzed",
                 "residential_projects",
                 "mixed_projects",
+                *(c for c in ("commercial_projects", "plotted_projects") if c in dev),
             )
         },
         "aliases": _json(dev["aliases"]),
@@ -605,15 +606,22 @@ def developer_report(developer_id: int, as_of: date | None = None) -> dict | Non
     return clean(report)
 
 
-def market_report(as_of: date | None = None) -> dict:
-    """Dashboard: market-level metrics over the whole district dataset."""
-    projects = _project_frame()
-    progress = _progress_frame("")
+def market_report(as_of: date | None = None, city: str | None = None, category: str | None = None) -> dict:
+    """Dashboard: market-level metrics over the dataset, optionally limited to a city and/or categories.
+
+    The unfiltered report covers everything in the snapshot (all published cities and categories)."""
+    where, bound = db.scope_clause(city, category)
+    where_pr, _ = db.scope_clause(city, category, "pr")
+    projects = _project_frame(where, bound)
+    progress = _progress_frame(f"JOIN projects pr ON pr.project_id = pp.project_id WHERE {where_pr}", bound)
     status = status_breakdown(projects)
+    where_dp, _ = db.scope_clause(city, category, "p")
     devs = pd.DataFrame(
         db.query(
-            "SELECT developer_id, name, projects_total, projects_analyzed, completed, delayed, avg_progress_pct, "
-            "completion_rate_pct, total_extensions, complaints_total FROM developers"
+            "SELECT d.developer_id, d.name, d.projects_total, d.projects_analyzed, d.completed, d.delayed, "  # noqa: S608
+            "d.avg_progress_pct, d.completion_rate_pct, d.total_extensions, d.complaints_total FROM developers d "
+            f"WHERE EXISTS (SELECT 1 FROM projects p WHERE p.developer_id = d.developer_id AND {where_dp})",
+            bound,
         )
     )
     leaderboard = []
@@ -621,17 +629,19 @@ def market_report(as_of: date | None = None) -> dict:
         top = devs.sort_values(["projects_total", "projects_analyzed"], ascending=False).head(LEADERBOARD_SIZE)
         leaderboard = [clean(r) for r in top.to_dict("records")]
     legal = pd.DataFrame(
-        db.query("SELECT record_type, category, penalty_amount FROM project_legal"),
+        db.query(
+            "SELECT l.record_type, l.category, l.penalty_amount FROM project_legal l "  # noqa: S608
+            f"JOIN projects pr ON pr.project_id = l.project_id WHERE {where_pr}",
+            bound,
+        ),
         columns=["record_type", "category", "penalty_amount"],
     )
     a = _analysed(projects)
     reg = projects.assign(year=_year(projects["registration_date"])).dropna(subset=["year"])
+    # residential / mixed are always present (stable shape); commercial / plotted appear once the data has them
+    extra = [c for c in ("commercial", "plotted") if (projects["category"] == c).any()]
     registrations = [
-        {
-            "year": int(y),
-            "residential": int((g["category"] == "residential").sum()),
-            "mixed": int((g["category"] == "mixed").sum()),
-        }
+        {"year": int(y), **{c: int((g["category"] == c).sum()) for c in ("residential", "mixed", *extra)}}
         for y, g in reg.groupby("year")
     ]
     return clean(

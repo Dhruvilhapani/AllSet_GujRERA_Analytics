@@ -20,8 +20,10 @@ class Endpoint:
     entity_type: str
     family: str
     priority: int          # lower = earlier
-    depends_on: str | None = None   # placeholder that must be resolved from 'core' first
+    depends_on: str | None = None   # placeholder that must be resolved from an earlier response first
     description: str = ""
+    method: str = "GET"
+    optional: bool = False   # nice-to-have: one quick retry, and a persistent HTTP 500 is recorded as 'empty', not 'failed'
 
 
 UNIVERSE = {
@@ -32,7 +34,17 @@ UNIVERSE = {
                                  "universe", "listing", 0, description="Full list of Residential projects"),
     "list_mixed": Endpoint("list_mixed", "dashboard/get-district-wise-projectlist/0/0/all/all/Mixed",
                            "universe", "listing", 0, description="Full list of Mixed Development projects"),
+    "list_commercial": Endpoint("list_commercial",
+                                "dashboard/get-district-wise-projectlist/0/0/all/all/Commercial",
+                                "universe", "listing", 0, description="Full list of Commercial projects"),
+    "list_plotted": Endpoint("list_plotted",
+                             "dashboard/get-district-wise-projectlist/0/0/all/all/Plotted",
+                             "universe", "listing", 0, description="Full list of Plotted Development projects"),
 }
+
+# Portal label (projectType in the list rows / dashboard grid) for every list endpoint.
+TYPE_LABEL = {"list_residential": "Residential/Group Housing", "list_mixed": "Mixed Development",
+              "list_commercial": "Commercial", "list_plotted": "Plotted Development"}
 
 PROJECT_ENDPOINTS: list[Endpoint] = [
     Endpoint("core", "project_reg/public/alldatabyprojectid/{id}", "project", "project_detail", 10,
@@ -65,8 +77,33 @@ PROJECT_ENDPOINTS: list[Endpoint] = [
              "qpr", 23, depends_on="formOneId", description="Per-block progress from latest Form 1"),
     Endpoint("form_two", "formtwo/public/getform-two-by-id/{formTwoId}", "project", "qpr", 24,
              depends_on="formTwoId", description="Latest engineer certificate: work done %, cost incurred"),
+    # ---- unit layer (block-wise / unit-wise booking status) ------------------------------------------------
+    Endpoint("qtr_form_ids", "quarter/public/get-qtr-form-details/{id}", "project", "units", 25,
+             description="Ids of the latest Form 1 / 2 / 3 (formThreeId feeds the unit list)"),
+    Endpoint("block_names", "citizen_survey/citizen_claim/get-project-all-block{id}", "project", "units", 26,
+             description="Block names the portal offers in its unit selector (+ unit numbers as free text)"),
+    Endpoint("block_master", "project_reg/project-app/getproject-blocklist/{id}", "project", "units", 27,
+             description="Block master: blockId, development dates, height / FSI / built-up area"),
+    Endpoint("form_three", "formthree/public/getform-three-byid/{formThreeId}", "project", "units", 28,
+             depends_on="formThreeId", description="Form 3 header: submission date, declared totals "
+                                                   "(answers HTTP 500 for some projects; the unit rows do not need it)",
+             optional=True),
+    Endpoint("last_submitted", "project_reg/project/last-submitted-date/{id}", "project", "units", 31, optional=True,
+             description="Date/time of the project's latest submission recorded on GujRERA (the portal's own "
+                         "'process submission date'); answers status 300 / null for some projects"),
+    Endpoint("form_one", "formone/public/getfrom-one-byformone-id/{formOneIdLatest}", "project", "units", 30,
+             depends_on="formOneIdLatest", optional=True,
+             description="Latest Form 1 (architect's certificate): common facilities with applicability, progress %, "
+                         "dates; named extra facilities (e.g. CLUB HOUSE); per-block floors and lifts"),
 ]
 PROJECT_ENDPOINTS_BY_KEY = {e.key: e for e in PROJECT_ENDPOINTS}
+
+# Fan-out endpoints: one task per (project, block). They are queued by Crawler.enqueue_unit_lists once the
+# block set of a project is known, so they are not part of PROJECT_ENDPOINTS.
+UNIT_LIST = Endpoint("unit_list", "formthree/public/get-inv-details-for-view", "project_block", "units", 29,
+                     description="One row per unit of a block (latest Form 3): unit no, usage, carpet area, "
+                                 "combined exclusive balcony/veranda + open-terrace area, status, agreement date",
+                     method="POST")
 
 PROMOTER_ENDPOINT = Endpoint("promoter", "user_reg/promoter/promoter{promoterId}", "promoter", "promoter", 30,
                              description="Promoter master record")

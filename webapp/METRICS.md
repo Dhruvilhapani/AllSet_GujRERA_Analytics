@@ -1,7 +1,7 @@
 # Metric definitions
 
 Every number in the web app is computed on the server in `webapp/server/analytics.py` (pandas / NumPy) from the
-published snapshot (`gujrera_scraper/data/app/gujrera_ahmedabad.db`). The frontend only displays the results.
+published snapshot (`gujrera_scraper/data/app/gujrera_ahmedabad_gandhinagar.db`, or the older `gujrera_ahmedabad.db`). The frontend only displays the results.
 `webapp/tests/test_analytics.py` pins each rule below, and `webapp/qa/validate_metrics.py` recomputes the main
 metrics independently and compares them with the API.
 
@@ -13,7 +13,9 @@ metrics independently and compares them with the API.
 - **Analysed project.** A project whose GujRERA detail record has been crawled (`detail_crawled = 1`). Status,
   progress, sales, extension and legal metrics use analysed projects only. Registration counts use every registered
   project.
-- **Scope.** Ahmedabad district; Residential and Mixed-use projects.
+- **Scope.** The cities and categories in the snapshot (`/api/meta`: Ahmedabad and Gandhinagar; Residential, Mixed-use,
+  Commercial, Plotted). Dashboard and Developers accept `city` / `category`; developer-level figures always cover the
+  developer's whole portfolio in the snapshot.
 - **Not shown.** Revenue (GujRERA does not publish it), and portfolio-level unit totals (units / sold / unsold exist
   only at project level).
 
@@ -34,6 +36,9 @@ metrics independently and compares them with the API.
 | **Remaining** | Unsold (unbooked) units, as last reported. | Not published → `null` |
 | **Sales %** | sold ÷ (sold + unsold) × 100. | Either missing, or both 0 → `null` |
 | **Progress** | Physical construction progress in the latest QPR, capped at 100%. | No QPR → `null` |
+| **Unit rows** (Blocks & units tab) | One row per unit of the latest Form 3, as published. Booked / unbooked counts are counted from these rows and shown only next to the status they came from; the portal's block booking chart (QPR-fed) is shown beside them because the two are filed separately and can differ. | Unit data not complete → state banner, no totals; never counted as unbooked |
+| **Area (balcony / terrace)** | One published figure per unit: exclusive balcony/veranda and open terrace together. Not split. `0` is a published zero. | Not published → `null` ("N/A") |
+| **Date of agreement** | As reported by the promoter; not necessarily the first-sale date. | Blank → "N/A" |
 
 ## Developer level
 

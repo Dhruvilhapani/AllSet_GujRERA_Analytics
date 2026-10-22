@@ -45,7 +45,10 @@ async function getJson(u) {
 export const getMetaFresh = () => getJson(url('meta', { t: Date.now() }))
 
 // `v` is the snapshot version: a new snapshot gives a new URL, so caches never serve stale data.
-export const getDashboard = ({ v }) => getJson(url('dashboard', { v }))
+export const getDashboard = params => getJson(url('dashboard', params))
 export const listDevelopers = params => getJson(url('developers', params))
 export const getDeveloper = ({ id, v }) => getJson(url(`developers/${id}`, { v }))
+export const listProjects = params => getJson(url('projects', params))
+export const searchAll = params => getJson(url('search', params))
 export const getProject = ({ id, v }) => getJson(url(`projects/${id}`, { v }))
+export const getUnits = ({ id, ...params }) => getJson(url(`projects/${id}/units`, params))

@@ -3,27 +3,41 @@
  * this page only lays them out. Inventory (units / sold / unsold) lives at project level, not here.
  */
 
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { ColumnChart, ProgressByYearChart, SERIES, StatusBar } from '../components/charts.jsx'
-import { Card, DataTable, DatasetStatus, Kpis, LoadError, Page, PageHeader, SkeletonRows } from '../components/ui.jsx'
+import { Card, DataTable, DatasetStatus, Kpis, LoadError, Page, PageHeader, Segmented, SkeletonRows } from '../components/ui.jsx'
 import { getDashboard } from '../lib/api.js'
 import { useDataVersion } from '../lib/dataVersion.jsx'
-import { fmtInt, fmtPct, fmtRupees } from '../lib/format.js'
+import { CATEGORY_LABEL, CATEGORY_ORDER, fmtInt, fmtPct, fmtRupees } from '../lib/format.js'
 import useFetch from '../lib/useFetch.js'
 
 export default function DashboardPage() {
   const navigate = useNavigate()
   const { meta: m, version, error: metaError } = useDataVersion()
-  const { data: d, loading, error } = useFetch(getDashboard, version ? { v: version } : null)
+  const [city, setCity] = useState('')
+  const [category, setCategory] = useState('')
+  const { data: d, loading, error } = useFetch(getDashboard, version ? { v: version, city, category } : null)
   const scope = m?.dataset_complete ? '' : ' · current dataset'
   const k = d?.kpis
+  const cities = m?.cities || []
+  const categories = m?.categories || []
+  // one chart series per category the data actually has (residential / mixed always, to keep the shape stable)
+  const present = d ? CATEGORY_ORDER.filter(c => c === 'residential' || c === 'mixed' || (d.registrations_by_year || []).some(r => r[c] != null)) : []
+  const where = [city, category ? CATEGORY_LABEL[category] : null].filter(Boolean).join(' · ')
 
   return (
     <Page>
-      <PageHeader title="Dashboard" subtitle={`${m?.district || 'Ahmedabad'} RERA market · Residential and Mixed-use projects registered with GujRERA`} />
+      <PageHeader title="Dashboard" subtitle={`${cities.join(' + ') || m?.district || 'GujRERA'} market · ${m?.scope || 'Projects registered with GujRERA'}${where ? ` · filtered: ${where}` : ''}`} />
       {(error || metaError) && <LoadError>{error || metaError}</LoadError>}
       <DatasetStatus meta={m} />
+      {(cities.length > 1 || categories.length > 1) && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, margin: '0 0 16px' }}>
+          {cities.length > 1 && <Segmented label="City" value={city} onChange={setCity} options={[{ value: '', label: 'All cities' }, ...cities.map(c => ({ value: c, label: c }))]} />}
+          {categories.length > 1 && <Segmented label="Project category" value={category} onChange={setCategory} options={[{ value: '', label: 'All types' }, ...categories.map(c => ({ value: c, label: CATEGORY_LABEL[c] || c }))]} />}
+        </div>
+      )}
       {(loading || !m) && !d && !metaError && <SkeletonRows rows={10} label="Loading dashboard…" />}
       {d && (
         <>
@@ -44,7 +58,7 @@ export default function DashboardPage() {
               subtitle="All registered projects, by GujRERA approval year"
               rows={d.registrations_by_year}
               xKey="year"
-              series={[{ key: 'residential', label: 'Residential', color: SERIES[0] }, { key: 'mixed', label: 'Mixed-use', color: SERIES[1] }]}
+              series={present.map(c => ({ key: c, label: CATEGORY_LABEL[c], color: SERIES[CATEGORY_ORDER.indexOf(c)] }))}
               empty="No registrations."
             />
           </div>

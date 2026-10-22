@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import { DeveloperComparison, DeveloperFilters, DeveloperTable } from '../components/developers.jsx'
 import { Card, DatasetStatus, LoadError, Page, PageHeader, SkeletonRows, SmallButton } from '../components/ui.jsx'
@@ -16,18 +16,23 @@ import useFetch from '../lib/useFetch.js'
 
 const PAGE_SIZE = 25
 const MAX_COMPARE = 4
-const EMPTY_FILTERS = { category: '', locality: '', min_projects: '', min_sales_pct: '', has_delayed: '', has_complaints: '' }
+const EMPTY_FILTERS = { city: '', category: '', locality: '', min_projects: '', min_sales_pct: '', has_delayed: '', has_complaints: '' }
 const NO_LIST = { developers: [], total: 0, page: 1, page_size: PAGE_SIZE }
 
 export default function DevelopersPage() {
   const navigate = useNavigate()
-  const [search, setSearch] = useState('')
-  const [q, setQ] = useState('')
+  const [params] = useSearchParams()
+  const [search, setSearch] = useState(params.get('q') || '')
+  const [q, setQ] = useState((params.get('q') || '').trim())
   const [filters, setFilters] = useState(EMPTY_FILTERS)
   const [sort, setSort] = useState({ by: 'projects', dir: 'desc' })
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState([])
   const [comparing, setComparing] = useState(false)
+
+  useEffect(() => { // the global search's "see all developers" link sets ?q=
+    setSearch(params.get('q') || '')
+  }, [params])
 
   useEffect(() => { // debounce typing so each keystroke is not a request
     const t = setTimeout(() => {
@@ -58,7 +63,7 @@ export default function DevelopersPage() {
 
   return (
     <Page>
-      <PageHeader title="Developers" subtitle={`${m?.district || 'Ahmedabad'} Developer Intelligence · Residential and Mixed-use projects registered with GujRERA`} />
+      <PageHeader title="Developers" subtitle={`${m?.district || 'GujRERA'} Developer Intelligence · ${m?.scope || 'Projects registered with GujRERA'}`} />
       {metaError && <LoadError>{metaError}</LoadError>}
       <DatasetStatus meta={m} />
       {comparing && selected.length >= 2 && <DeveloperComparison ids={selected} onClose={() => setComparing(false)} />}
@@ -72,7 +77,15 @@ export default function DevelopersPage() {
         )}
       >
         <div style={{ padding: '0 20px' }}>
-          <DeveloperFilters filters={filters} onChange={onFilters} localities={m?.localities || []} search={search} onSearch={setSearch} />
+          <DeveloperFilters
+            filters={filters}
+            onChange={onFilters}
+            localities={filters.city ? (m?.localities_by_city?.[filters.city] || []) : (m?.localities || [])}
+            cities={m?.cities || []}
+            categories={m?.categories || ['residential', 'mixed']}
+            search={search}
+            onSearch={setSearch}
+          />
           {list.error && <LoadError>{list.error}</LoadError>}
         </div>
         {(list.loading || !m) && !data.developers.length && !metaError

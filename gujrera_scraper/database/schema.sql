@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS raw_responses (
 );
 CREATE INDEX IF NOT EXISTS ix_raw_entity ON raw_responses(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS ix_raw_endpoint ON raw_responses(endpoint_key);
+-- RawStore.load(endpoint_key, entity_id) is called per project by the parser and the crawler; without this index each
+-- call scanned every row of the endpoint (minutes of CPU for a few thousand projects).
+CREATE INDEX IF NOT EXISTS ix_raw_endpoint_entity ON raw_responses(endpoint_key, entity_id);
 
 CREATE TABLE IF NOT EXISTS crawl_queue (
     id              INTEGER PRIMARY KEY,
@@ -43,6 +46,7 @@ CREATE TABLE IF NOT EXISTS crawl_queue (
     last_error      TEXT,
     changed         INTEGER,                           -- 1 if the response differed from the last stored copy
     updated_at      TEXT,
+    body            TEXT,                              -- JSON body for POST tasks (unit_list); NULL for GET tasks
     UNIQUE (run_id, endpoint_key, entity_id)
 );
 CREATE INDEX IF NOT EXISTS ix_queue_status ON crawl_queue(run_id, status, priority, id);
@@ -123,8 +127,8 @@ CREATE TABLE IF NOT EXISTS projects (
     reg_no_original         TEXT,                  -- reg no as first registered (from applications / certificate)
     ack_no                  TEXT,
     project_name            TEXT,
-    project_type            TEXT,                  -- Residential/Group Housing | Mixed Development
-    project_category        TEXT,                  -- residential | mixed
+    project_type            TEXT,                  -- Residential/Group Housing | Mixed Development | Commercial | Plotted Development
+    project_category        TEXT,                  -- residential | mixed | commercial | plotted
     affordable_housing      TEXT,
     description             TEXT,
     status_source           TEXT,                  -- project_status as published (New / Ongoing / Completed)
@@ -175,6 +179,16 @@ CREATE TABLE IF NOT EXISTS projects (
     approving_authority     TEXT,
     months_delayed_declared INTEGER,               -- noOfMonthDelayed as published
     last_qpr_submitted_at   TEXT,
+    portal_last_submitted_at TEXT,                 -- GujRERA's latest-submission timestamp for the project (a new filing moves it)
+    details_updated_on      TEXT,                  -- projectDetail.updatedOn: when the promoter last saved the project details
+    engineer_cert_submitted_on TEXT,               -- latest engineer's certificate (Form 2) submission date
+    -- unit layer (parser/unit_parser.py). unit_data_state: complete | partial | not_published | error | not_fetched.
+    -- Only 'complete' means every expected block returned its unit rows; anything else must never be shown as "unsold".
+    unit_data_state         TEXT,
+    unit_data_note          TEXT,
+    units_scraped_at        TEXT,
+    units_row_count         INTEGER,
+    units_form3_submitted_on TEXT,                 -- "Submitted On" date of the Form 3 the unit rows come from
     source_endpoint         TEXT,
     list_row_hash           TEXT,                  -- hash of the project's row in the official list (change detection)
     first_seen_at           TEXT,
@@ -243,6 +257,20 @@ CREATE TABLE IF NOT EXISTS project_blocks (
     dev_start_date  TEXT,
     dev_end_date    TEXT,
     source_endpoint TEXT,
+    -- block master (project_reg/project-app/getproject-blocklist)
+    block_id_src    INTEGER,
+    height          REAL,
+    fsi             REAL,
+    builtup_area_sqm REAL,
+    -- unit-row counts of the latest Form 3 (project_unit_inventory); booked_units/unbooked_units above stay the
+    -- portal block-chart counts. The two sources can disagree (different submission dates): both are kept.
+    unit_rows       INTEGER,
+    unit_booked     INTEGER,
+    unit_unbooked   INTEGER,
+    unit_other      INTEGER,
+    -- Form 1 part A (NULL when the architect did not fill them in)
+    floors          INTEGER,
+    lifts           INTEGER,
     PRIMARY KEY (project_id, block_name)
 );
 
@@ -256,8 +284,134 @@ CREATE TABLE IF NOT EXISTS project_units (
     units_completed_declared INTEGER,
     carpet_area_sqm     REAL,
     exclusive_area_sqm  REAL,
+    open_terrace_area_sqm REAL,            -- areaOfExclusiveOpenTerrace (per unit type, registration inventory)
     source_endpoint     TEXT,
     PRIMARY KEY (project_id, unit_type_raw)
+);
+
+------------------------------------------------------------------------------
+-- Unit layer: Form 3 header, one row per unit (latest Form 3), change history, per-block fetch outcome
+------------------------------------------------------------------------------
+-- Header of every Form 3 seen for a project (a new quarterly Form 3 has a new id -> a new row).
+CREATE TABLE IF NOT EXISTS project_form3 (
+    project_id          INTEGER NOT NULL REFERENCES projects(project_id),
+    form_three_id       INTEGER NOT NULL,
+    form_status         TEXT,
+    submitted_on        TEXT,              -- submissionOn as published (the portal's "Submitted On")
+    number_of_units     INTEGER,           -- declared in the header; can disagree with the unit rows
+    booked_declared     INTEGER,
+    unbooked_declared   INTEGER,           -- NOTE: copies bookedUnit for some projects (source bug); never trusted alone
+    total_residential   INTEGER,
+    total_shop          INTEGER,
+    total_office        INTEGER,
+    total_others        INTEGER,
+    is_latest           INTEGER,           -- 1 for the Form 3 id currently published by qtr_form_ids
+    first_seen_at       TEXT,
+    last_seen_at        TEXT,
+    source_endpoint     TEXT,
+    PRIMARY KEY (project_id, form_three_id)
+);
+
+-- One row per unit as published in the latest Form 3. Source values are kept as published; only the *_norm / *_class
+-- columns are derived. Personal fields (allottee name, KYC, mobile) and the masked amounts are never stored.
+-- Identity: (project, block, normalised unit label, duplicate sequence) - the source row id changes per Form 3.
+CREATE TABLE IF NOT EXISTS project_unit_inventory (
+    project_id          INTEGER NOT NULL REFERENCES projects(project_id),
+    block_name          TEXT NOT NULL,
+    unit_no_norm        TEXT NOT NULL,
+    dup_seq             INTEGER NOT NULL DEFAULT 0,
+    block_id_src        TEXT,
+    unit_no_raw         TEXT,
+    unit_kind           TEXT,              -- single | range | list
+    usage_raw           TEXT,
+    usage_class         TEXT,              -- residential | shop | office | plot | other
+    carpet_area_sqm     REAL,
+    area_excl_balcony_terrace_sqm REAL,    -- ONE source field: exclusive balcony/veranda AND open terrace, not splittable
+    status_source       TEXT,              -- exactly as published (BOOKED / UNBOOKED / ...)
+    status_norm         TEXT,              -- booked | unbooked | other | unknown
+    agreement_date      TEXT,              -- date part of the published agreement date (YYYY-MM-DD)
+    agreement_date_raw  TEXT,
+    encumbrance_status  TEXT,
+    redeveloped_flag    TEXT,
+    source_row_id       INTEGER,
+    form_three_id       INTEGER,
+    form3_submitted_on  TEXT,
+    is_current          INTEGER NOT NULL DEFAULT 1,
+    first_seen_at       TEXT,
+    last_seen_at        TEXT,
+    last_changed_at     TEXT,
+    PRIMARY KEY (project_id, block_name, unit_no_norm, dup_seq)
+);
+CREATE INDEX IF NOT EXISTS ix_unitinv_status ON project_unit_inventory(project_id, block_name, status_norm);
+CREATE INDEX IF NOT EXISTS ix_unitinv_project ON project_unit_inventory(project_id, is_current);
+
+-- Append-only: written when a unit appears, disappears or its status / agreement date changes between scrapes.
+-- GujRERA publishes only the latest Form 3, so this history starts at our first scrape of a project.
+CREATE TABLE IF NOT EXISTS project_unit_history (
+    id                  INTEGER PRIMARY KEY,
+    project_id          INTEGER NOT NULL,
+    block_name          TEXT NOT NULL,
+    unit_no_norm        TEXT NOT NULL,
+    dup_seq             INTEGER NOT NULL DEFAULT 0,
+    observed_at         TEXT NOT NULL,
+    change_type         TEXT NOT NULL,     -- appeared | status_changed | agreement_date_changed | disappeared
+    status_old          TEXT,
+    status_new          TEXT,
+    agreement_date_old  TEXT,
+    agreement_date_new  TEXT,
+    form_three_id       INTEGER
+);
+CREATE INDEX IF NOT EXISTS ix_unithist_unit ON project_unit_history(project_id, block_name, unit_no_norm, dup_seq);
+
+-- Outcome of the unit-list request of each block (drives projects.unit_data_state).
+CREATE TABLE IF NOT EXISTS project_block_fetch (
+    project_id          INTEGER NOT NULL,
+    block_name          TEXT NOT NULL,
+    outcome             TEXT NOT NULL,     -- ok | empty | error | not_fetched
+    row_count           INTEGER,
+    http_status         INTEGER,
+    form_three_id       INTEGER,
+    in_expected         INTEGER,           -- 1 if the name comes from the trusted block-name source of the project
+    fetched_at          TEXT,
+    PRIMARY KEY (project_id, block_name)
+);
+
+-- External development / services / near-by facilities declared at registration (not a gym/pool style amenity list:
+-- the public API has no such structured list).
+CREATE TABLE IF NOT EXISTS project_infrastructure (
+    project_id          INTEGER NOT NULL REFERENCES projects(project_id),
+    category            TEXT NOT NULL,     -- external_development | water_sewage | nearby | other_development
+    name                TEXT NOT NULL,
+    value               TEXT,
+    source_endpoint     TEXT,
+    PRIMARY KEY (project_id, category, name)
+);
+
+-- Facilities / amenities from the latest Form 1 (part B): common facilities with YES/NO applicability, % work done and
+-- dates, plus facilities named by the promoter (e.g. CLUB HOUSE). Items that are not listed are "not declared".
+CREATE TABLE IF NOT EXISTS project_amenities (
+    project_id          INTEGER NOT NULL REFERENCES projects(project_id),
+    item_key            TEXT NOT NULL,     -- Form 1B stem (internalRoad, fireFighting, ...) or other:<id>
+    label               TEXT,
+    category            TEXT,              -- roads | water | sewage_waste | electrical | energy | fire_safety | safety_security |
+                                           -- landscaping | community | structure | other | named_by_promoter
+    source              TEXT,              -- form_one_common | form_one_other
+    applicable          TEXT,              -- YES | NO | NULL (not stated)
+    progress_pct        REAL,              -- % of the work done as certified (meaningful when applicable = YES)
+    planned_start       TEXT,
+    planned_end         TEXT,
+    actual_start        TEXT,
+    actual_end          TEXT,
+    remarks             TEXT,
+    form_one_id         INTEGER,
+    form1_submitted_on  TEXT,
+    PRIMARY KEY (project_id, item_key)
+);
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version             TEXT PRIMARY KEY,
+    applied_at          TEXT NOT NULL,
+    description         TEXT
 );
 
 -- QPR physical-progress history (one row per reported quarter).

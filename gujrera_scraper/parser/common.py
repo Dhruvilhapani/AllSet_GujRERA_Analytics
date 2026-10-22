@@ -191,4 +191,58 @@ def classify_unit_type(raw) -> str:
         return "commercial"
     if res:
         return "residential"
+    if re.search(r"\bplots?\b", s):
+        return "plot"
+    return "other"
+
+
+# ---------------------------------------------------------------------- unit-level (Form 3) helpers
+# A bare hyphen is NOT a range marker ('A-1-01' is wing-floor-unit); only 'to', '~' and a spaced dash are.
+_RANGE_RX = re.compile(r"\bto\b|~|\d\s+[-–]\s+\d", re.I)
+_LIST_RX = re.compile(r"[,;&]|\band\b", re.I)
+
+
+def normalize_unit_label(raw) -> str:
+    """Identity form of a unit label: trimmed, whitespace collapsed, case-folded. Never drops characters, so two
+    different promoter labels never collide. A blank label becomes '(blank)'."""
+    s = re.sub(r"\s+", " ", str(raw)).strip().casefold() if raw is not None else ""
+    return s or "(blank)"
+
+
+def unit_label_kind(raw) -> str:
+    """single | range | list. Promoters sometimes file one inventory line for many units ('101 to 904',
+    'GF 1 to 14 and FF 1 to 14'); such rows are kept verbatim and flagged, never expanded into invented units."""
+    s = str(raw or "").strip()
+    if _RANGE_RX.search(s):
+        return "range"
+    if _LIST_RX.search(s):
+        return "list"
+    return "single"
+
+
+# Only statuses observed on the portal are mapped. Anything else is 'other' (kept in status_source), a missing
+# status is 'unknown'. SOLD / REGISTERED / AVAILABLE are deliberately not treated as aliases.
+UNIT_STATUS_MAP = {"BOOKED": "booked", "UNBOOKED": "unbooked"}
+
+
+def normalize_unit_status(raw) -> str:
+    s = (str(raw).strip().upper() if raw is not None else "")
+    if not s:
+        return "unknown"
+    return UNIT_STATUS_MAP.get(s, "other")
+
+
+def classify_usage(raw, project_category: str | None = None) -> str:
+    """residential | shop | office | plot | other. In Plotted Development projects every row is a plot."""
+    if project_category == "plotted":
+        return "plot"
+    s = (str(raw).strip().lower() if raw is not None else "")
+    if re.search(r"resid|flat|bungalow|apartment|house|villa", s):
+        return "residential"
+    if re.search(r"shop|showroom|retail", s):
+        return "shop"
+    if "office" in s:
+        return "office"
+    if re.search(r"\bplots?\b", s):
+        return "plot"
     return "other"

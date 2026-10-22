@@ -19,9 +19,11 @@ from typing import Iterable
 
 from database.db import RawStore, utcnow
 from scraper import complaints as complaints_mod
-from scraper.endpoints import (PROJECT_ENDPOINTS, PROJECT_ENDPOINTS_BY_KEY, PROMOTER_ENDPOINT, UNIVERSE,
+from scraper.endpoints import (PROJECT_ENDPOINTS, PROJECT_ENDPOINTS_BY_KEY, PROMOTER_ENDPOINT, UNIT_LIST, UNIVERSE,
                                Endpoint)
-from scraper.network_client import FetchError, GujReraClient, Response
+from scraper.network_client import BASE_URL, FetchError, GujReraClient, Response
+from scraper.project_listing import in_scope
+from scraper.units import SOURCES, block_candidates
 
 log = logging.getLogger(__name__)
 
@@ -57,19 +59,34 @@ class Crawler:
         self.priority_endpoints = set(pr.get("endpoints") or [])
         self.priority_districts = {d.strip().lower() for d in pr.get("districts") or []}
         self._priority_ids: set[str] | None = None
+        self.unit_districts = {d.strip().lower() for d in (settings.get("units") or {}).get("districts") or []}
+        self.unit_refetch_days = (settings.get("units") or {}).get("refetch_days", 30)
+        self._unit_ids: set[str] | None = None
+        # skip_fetched: do not queue a task whose URL already has a stored successful response (resume / gap filling)
+        self.skip_fetched = False
+
+    def _ids_in_districts(self, districts: set[str]) -> set[str]:
+        ids: set[str] = set()
+        if districts:
+            for key in self.settings["target_project_types"]:
+                j, _ = self.raw.load(key, key)
+                for r in (j or {}).get("data") or []:
+                    if in_scope(r, key, self.settings) \
+                            and (r.get("districtName") or "").strip().lower() in districts:
+                        ids.add(str(r["projectRegId"]))
+        return ids
 
     def priority_ids(self) -> set[str]:
         """Project ids in the priority districts, from the stored official lists."""
         if self._priority_ids is None:
-            ids: set[str] = set()
-            if self.priority_districts:
-                for key in self.settings["target_project_types"]:
-                    j, _ = self.raw.load(key, key)
-                    for r in (j or {}).get("data") or []:
-                        if (r.get("districtName") or "").strip().lower() in self.priority_districts:
-                            ids.add(str(r["projectRegId"]))
-            self._priority_ids = ids
+            self._priority_ids = self._ids_in_districts(self.priority_districts)
         return self._priority_ids
+
+    def unit_scope_ids(self) -> set[str]:
+        """Project ids for which the unit layer (block names, Form 3, per-block unit lists) is crawled."""
+        if self._unit_ids is None:
+            self._unit_ids = self._ids_in_districts(self.unit_districts)
+        return self._unit_ids
 
     def _boosted(self, entity_type: str, entity_id, endpoint_key: str) -> bool:
         return entity_type == "project" and endpoint_key in self.priority_endpoints \
@@ -92,15 +109,17 @@ class Crawler:
 
     # ------------------------------------------------------------------ universe
     def fetch_universe(self) -> tuple[list[dict], dict]:
-        """Fetch dashboard counts + full Residential and Mixed lists. Returns (rows, counts)."""
+        """Fetch dashboard counts + the full list of every target project type. Returns (rows, counts); rows are
+        limited to the crawl scope (see project_listing.in_scope)."""
         counts_ep = UNIVERSE["dashboard_counts"]
         counts = self._fetch_and_store(counts_ep.path, counts_ep.key, "universe", "dashboard").json()
         rows: list[dict] = []
         for key in self.settings["target_project_types"]:
             ep = UNIVERSE[key]
             data = self._fetch_and_store(ep.path, ep.key, "universe", key).json()
-            batch = data.get("data") or []
-            log.info("%s: %d projects", key, len(batch))
+            full = data.get("data") or []
+            batch = [r for r in full if in_scope(r, key, self.settings)]
+            log.info("%s: %d projects listed, %d in scope", key, len(full), len(batch))
             rows.extend(batch)
         return rows, counts
 
@@ -114,27 +133,53 @@ class Crawler:
 
     # ------------------------------------------------------------------ queue
     def enqueue(self, run_id: str, entity_type: str, entity_id, endpoint_key: str, path: str,
-                priority: int) -> None:
-        self.conn.execute(
+                priority: int, body: str | None = None) -> bool:
+        """Queue one task; returns False when the (run, endpoint, entity) task already exists (or, with skip_fetched,
+        when its URL was already fetched successfully)."""
+        if self.skip_fetched and body is None and self.conn.execute(
+                "SELECT 1 FROM raw_responses WHERE url=? AND http_status=200", (BASE_URL + path.lstrip("/"),)).fetchone():
+            return False
+        cur = self.conn.execute(
             """INSERT OR IGNORE INTO crawl_queue(run_id, entity_type, entity_id, endpoint_key, path, priority,
-               sort_key, status, updated_at) VALUES (?,?,?,?,?,?,?, 'pending', ?)""",
+               sort_key, status, updated_at, body) VALUES (?,?,?,?,?,?,?, 'pending', ?, ?)""",
             (run_id, entity_type, str(entity_id), endpoint_key, path, priority,
-             queue_sort_key(entity_type, entity_id, self._boosted(entity_type, entity_id, endpoint_key)), utcnow()))
+             queue_sort_key(entity_type, entity_id, self._boosted(entity_type, entity_id, endpoint_key)), utcnow(),
+             body))
+        return cur.rowcount > 0
 
     def enqueue_projects(self, run_id: str, project_ids: Iterable[int],
                          endpoint_keys: Iterable[str] | None = None) -> int:
         keys = set(endpoint_keys) if endpoint_keys else {e.key for e in PROJECT_ENDPOINTS}
+        unit_ids = self.unit_scope_ids()
         n = 0
         self.conn.execute("BEGIN")
         for pid in project_ids:
             for ep in PROJECT_ENDPOINTS:
-                if ep.key in keys and ep.depends_on is None:
-                    self.enqueue(run_id, "project", pid, ep.key, ep.path.format(id=pid), ep.priority)
-                    n += 1
+                if ep.key not in keys or ep.depends_on is not None:
+                    continue
+                if ep.family in ("units", "updates") and str(pid) not in unit_ids:
+                    continue   # the unit layer is limited to the configured districts
+                self.enqueue(run_id, "project", pid, ep.key, ep.path.format(id=pid), ep.priority)
+                n += 1
         self.conn.execute("COMMIT")
         # dependent endpoints (formOneId / formTwoId / promoter) are enqueued once `core` is known
         self._dependent_keys = keys
         return n
+
+    def enqueue_from_stored(self, run_id: str, project_ids: Iterable[int | str]) -> int:
+        """Queue the tasks that depend on responses fetched in an earlier run (block progress / Form 2 / promoter
+        from `core`; Form 3 / Form 1 from `qtr_form_ids`). Needed when those parents are skipped as already fetched."""
+        before = self.conn.execute("SELECT COUNT(*) FROM crawl_queue WHERE run_id=?", (run_id,)).fetchone()[0]
+        self.conn.execute("BEGIN")
+        for pid in project_ids:
+            core, _ = self.raw.load("core", pid)
+            if isinstance(core, dict):
+                self._enqueue_dependents(run_id, str(pid), core)
+            qtr, _ = self.raw.load("qtr_form_ids", pid)
+            if isinstance(qtr, dict) and str(pid) in self.unit_scope_ids():
+                self._enqueue_latest_forms(run_id, str(pid), qtr)
+        self.conn.execute("COMMIT")
+        return self.conn.execute("SELECT COUNT(*) FROM crawl_queue WHERE run_id=?", (run_id,)).fetchone()[0] - before
 
     def enqueue_complaint_lists(self, run_id: str) -> int:
         summary = self._fetch_and_store(complaints_mod.SUMMARY_PATH, "complaint_summary", "complaint_list",
@@ -156,6 +201,58 @@ class Crawler:
         if promoter_id:
             self.enqueue(run_id, "promoter", promoter_id, PROMOTER_ENDPOINT.key,
                          PROMOTER_ENDPOINT.path.format(promoterId=promoter_id), PROMOTER_ENDPOINT.priority)
+
+    def _enqueue_latest_forms(self, run_id: str, project_id: str, qtr_json: dict) -> None:
+        """The latest Form 3 / Form 1 ids come from `qtr_form_ids` (not from `core`, whose ids can be older filings);
+        they are the ids the portal's own project page uses for the Form 3 header + unit list and for the facilities."""
+        data = (qtr_json or {}).get("data") or {}
+        if not isinstance(data, dict):
+            return
+        keys = getattr(self, "_dependent_keys", None) or {e.key for e in PROJECT_ENDPOINTS}
+        for key, placeholder, field in (("form_three", "formThreeId", "formThreeId"),
+                                        ("form_one", "formOneIdLatest", "formOneId")):
+            ep = PROJECT_ENDPOINTS_BY_KEY[key]
+            if data.get(field) and ep.key in keys:
+                self.enqueue(run_id, "project", project_id, ep.key, ep.path.format(**{placeholder: data[field]}),
+                             ep.priority)
+
+    # ------------------------------------------------------------------ unit layer fan-out
+    @staticmethod
+    def unit_list_url(form_three_id, block: str) -> str:
+        """Same string the client puts in Response.url / raw_responses.url for this POST."""
+        return f"{BASE_URL}{UNIT_LIST.path}#blockName={block}&formThreeId={form_three_id}"
+
+    def enqueue_unit_lists(self, run_id: str, project_ids: Iterable[int | str] | None = None) -> int:
+        """Stage 2 of the unit layer: for every in-scope project whose latest Form 3 id and block names are known
+        (stored raw responses), queue one POST per block. Safe to call repeatedly: queue rows are unique, and a
+        block whose unit list for this exact Form 3 id was fetched within `refetch_days` is skipped, so unchanged
+        projects cost nothing and a new quarterly Form 3 (new id -> new URL) is picked up automatically."""
+        wanted = {str(p) for p in project_ids} if project_ids is not None else None
+        scope = self.unit_scope_ids()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=self.unit_refetch_days)).replace(microsecond=0).isoformat()
+        n = skipped = 0
+        self.conn.execute("BEGIN")
+        for pid, qtr, _meta in self.raw.iter_endpoint("qtr_form_ids"):
+            if pid not in scope or (wanted is not None and pid not in wanted):
+                continue
+            data = qtr.get("data") if isinstance(qtr, dict) else None
+            ft = data.get("formThreeId") if isinstance(data, dict) else None
+            if not ft:
+                continue   # no Form 3 published: the parser records unit_data_state = not_published
+            sources = {k: self.raw.load(k, pid)[0] for k in SOURCES}
+            names, _expected, _src = block_candidates(sources)
+            for name in names:
+                old = self.conn.execute("SELECT http_status, fetched_at FROM raw_responses WHERE url=?",
+                                        (self.unit_list_url(ft, name),)).fetchone()
+                if old is not None and old["http_status"] == 200 and (old["fetched_at"] or "") >= cutoff:
+                    skipped += 1
+                    continue
+                if self.enqueue(run_id, "project_block", f"{pid}|{name}", UNIT_LIST.key, UNIT_LIST.path,
+                                UNIT_LIST.priority, body=json.dumps({"blockName": name, "formThreeId": ft})):
+                    n += 1
+        self.conn.execute("COMMIT")
+        log.info("unit lists: %d block tasks queued, %d skipped (fresh for the same Form 3)", n, skipped)
+        return n
 
     def queue_status(self, run_id: str) -> dict[str, int]:
         rows = self.conn.execute("SELECT status, COUNT(*) n FROM crawl_queue WHERE run_id=? GROUP BY status",
@@ -224,7 +321,11 @@ class Crawler:
         self._stop.set()
 
     def _fetch_task(self, row: sqlite3.Row):
-        return self.client.get(row["path"], store=False)
+        ep = PROJECT_ENDPOINTS_BY_KEY.get(row["endpoint_key"])
+        retries = 1 if ep is not None and ep.optional else None
+        if row["body"]:
+            return self.client.post_json(row["path"], json.loads(row["body"]), store=False)
+        return self.client.get(row["path"], store=False, max_retries=retries)
 
     def _record_result(self, run_id: str, row: sqlite3.Row, fut: Future) -> None:
         now = utcnow()
@@ -241,7 +342,9 @@ class Crawler:
                     self.conn.execute("UPDATE crawl_queue SET last_error=?, updated_at=? WHERE id=?",
                                       (str(e)[:500], now, row["id"]))
                     return
-                status = "empty" if e.status in EMPTY_STATUSES else None
+                ep = PROJECT_ENDPOINTS_BY_KEY.get(row["endpoint_key"])
+                status = "empty" if e.status in EMPTY_STATUSES or (ep is not None and ep.optional and e.status == 500) \
+                    else None
                 attempts = row["attempts"] + 1
                 if status is None:
                     status = "failed" if attempts >= self.max_attempts else "pending"
@@ -264,6 +367,11 @@ class Crawler:
                     self._enqueue_dependents(run_id, row["entity_id"], r.json())
                 except (json.JSONDecodeError, AttributeError) as e:
                     log.warning("core response for %s not usable: %r", row["entity_id"], e)
+            elif row["endpoint_key"] == "qtr_form_ids":
+                try:
+                    self._enqueue_latest_forms(run_id, row["entity_id"], r.json())
+                except (json.JSONDecodeError, AttributeError) as e:
+                    log.warning("qtr_form_ids response for %s not usable: %r", row["entity_id"], e)
 
 
 # ---------------------------------------------------------------------- incremental helpers

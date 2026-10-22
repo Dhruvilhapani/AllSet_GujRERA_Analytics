@@ -25,6 +25,8 @@ FILE_TO_KEY = {
     "maplocation__public__getProjectLocations__id": "location",
     "dashboard__project-block-progress-dtl-by-prj-id__formOneId": "block_progress",
     "formtwo__public__getform-two-by-id__formTwoId": "form_two",
+    "formone__public__getfrom-one-byformone-id__formOneId": "form_one",
+    "project_reg__project__last-submitted-date__id": "last_submitted",
 }
 
 
@@ -45,6 +47,27 @@ def list_row(pid: int) -> dict:
     raise KeyError(pid)
 
 
+def load_units(pid: int) -> tuple[dict, dict]:
+    """Unit-layer fixtures recorded by scripts/dump_unit_fixtures.py -> (project raw dict, unit_list responses).
+    The unit_list responses are keyed '<pid>|<block>' with the url the crawler would store."""
+    d = FIX / "units" / str(pid)
+    raw = {}
+    for key in ("qtr_form_ids", "block_names", "block_chart", "block_master", "form_three"):
+        f = d / f"{key}.json"
+        if f.exists():
+            raw[key] = (json.loads(f.read_text(encoding="utf-8")),
+                        {"id": 0, "url": f"fixture://{pid}/{key}", "fetched_at": "2026-10-21T00:00:00+00:00"})
+    ft = raw["qtr_form_ids"][0]["data"]["formThreeId"]
+    unit_raw = {}
+    for f in sorted(d.glob("unit_list__*.json")):
+        j = json.loads(f.read_text(encoding="utf-8"))
+        rows = j.get("data") or []
+        block = rows[0]["blockName"] if rows else f.stem.split("__", 1)[1].replace("_", " ")
+        unit_raw[f"{pid}|{block}"] = (j, {"id": 0, "url": f"fixture://units#blockName={block}&formThreeId={ft}",
+                                           "fetched_at": "2026-10-21T00:00:00+00:00"})
+    return raw, unit_raw
+
+
 @pytest.fixture
 def raw_for():
     return load_raw
@@ -53,3 +76,8 @@ def raw_for():
 @pytest.fixture
 def list_row_for():
     return list_row
+
+
+@pytest.fixture
+def units_for():
+    return load_units

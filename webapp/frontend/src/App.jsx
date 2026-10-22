@@ -1,19 +1,23 @@
 import { Suspense, lazy } from 'react'
 import { BrowserRouter, NavLink, Navigate, Route, Routes } from 'react-router-dom'
 
-import { DataVersionProvider } from './lib/dataVersion.jsx'
+import GlobalSearch from './components/GlobalSearch.jsx'
+import { DataVersionProvider, useDataVersion } from './lib/dataVersion.jsx'
 
 const DashboardPage = lazy(() => import('./pages/DashboardPage.jsx'))
 const DevelopersPage = lazy(() => import('./pages/DevelopersPage.jsx'))
 const DeveloperDetailPage = lazy(() => import('./pages/DeveloperDetailPage.jsx'))
+const ProjectsPage = lazy(() => import('./pages/ProjectsPage.jsx'))
 const ProjectDetailPage = lazy(() => import('./pages/ProjectDetailPage.jsx'))
 
 const NAV = [
   { to: '/dashboard', label: 'Dashboard' },
   { to: '/developers', label: 'Developers' },
+  { to: '/projects', label: 'Projects' },
 ]
 
 function Sidebar() {
+  const { meta } = useDataVersion()
   return (
     <aside style={{
       position: 'fixed', inset: '0 auto 0 0', width: 'var(--sidebar)', background: 'var(--card)',
@@ -22,7 +26,7 @@ function Sidebar() {
     >
       <div style={{ padding: '0 10px 18px' }}>
         <div style={{ fontWeight: 700, color: 'var(--ink)', fontSize: 15 }}>RERA Analytics</div>
-        <div className="body muted">Ahmedabad · GujRERA</div>
+        <div className="body muted">{`${meta?.cities?.length ? meta.cities.join(' · ') : meta?.district || 'Gujarat'} · GujRERA`}</div>
       </div>
       <nav aria-label="Main" style={{ display: 'grid', gap: 4 }}>
         {NAV.map(n => (
@@ -47,6 +51,19 @@ function Sidebar() {
   )
 }
 
+function TopBar() {
+  return (
+    <header
+      style={{
+        position: 'sticky', top: 0, zIndex: 40, display: 'flex', alignItems: 'center', gap: 16, padding: '10px 32px',
+        background: 'var(--canvas)', borderBottom: '1px solid var(--line)',
+      }}
+    >
+      <GlobalSearch />
+    </header>
+  )
+}
+
 function PageLoading() {
   return <div role="status" className="body muted" style={{ padding: 32 }}>Loading…</div>
 }
@@ -61,12 +78,14 @@ export default function App() {
       <DataVersionProvider>
         <Sidebar />
         <main style={{ marginLeft: 'var(--sidebar)', minHeight: '100%' }}>
+          <TopBar />
           <Suspense fallback={<PageLoading />}>
             <Routes>
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/developers" element={<DevelopersPage />} />
               <Route path="/developers/:developerId" element={<DeveloperDetailPage />} />
+              <Route path="/projects" element={<ProjectsPage />} />
               <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
               <Route path="*" element={<NotFound />} />
             </Routes>

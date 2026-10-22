@@ -16,21 +16,34 @@ network:
 target_project_types:      # list endpoints to crawl (see scraper/endpoints.py)
   - list_residential
   - list_mixed
+  - list_commercial
+  - list_plotted
+
+# Types listed here are only crawled/parsed for `target_districts` (the portal lists all of Gujarat in one response).
+# Residential and Mixed keep their original all-Gujarat scope.
+district_scoped_types: [list_commercial, list_plotted]
+target_districts: [Ahmedabad, Gandhinagar]
 
 priority:
   # Projects in these districts are crawled first, limited to the endpoints the analysis needs; their remaining
   # endpoints and all other districts follow in the same run.
-  districts: [Ahmedabad]
+  districts: [Ahmedabad, Gandhinagar]
   endpoints: [core, details, applications, qpr_details, progress_report, qpr_progress, qpr_quarters, qe_filing,
-              block_chart, unit_summary, form_two, location]
+              block_chart, unit_summary, form_two, location, qtr_form_ids, block_names, block_master, form_three, form_one, last_submitted]
 
 incremental:
   # On incremental runs these endpoints are re-fetched for every known project;
   # the remaining (slow-changing) endpoints are re-fetched only for new projects, projects whose
   # list row changed, or projects not fully refreshed for `full_refresh_days`.
   volatile_endpoints: [core, applications, qpr_details, progress_report, qpr_progress, qpr_quarters,
-                       qe_filing, block_chart, unit_summary, form_five]
+                       qe_filing, block_chart, unit_summary, form_five, qtr_form_ids, form_three, form_one, last_submitted]
   full_refresh_days: 90
+
+units:
+  # Unit-wise booking layer (see docs/data_dictionary.md). Unit lists are only re-fetched for a project when its
+  # latest Form 3 id / submission date changed, its unit data was not complete, or after `refetch_days`.
+  districts: [Ahmedabad, Gandhinagar]
+  refetch_days: 30
 
 documents:
   # Only these document types are downloaded and parsed (user decision: analytics-critical only).

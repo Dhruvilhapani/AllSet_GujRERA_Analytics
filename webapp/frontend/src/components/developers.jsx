@@ -14,7 +14,6 @@ import { Badge, Card, DataTable, Empty, FilterSelect, LoadError, Segmented, Skel
 
 /* ------------------------------------------------------------------ list page */
 
-const CATEGORY_OPTIONS = [{ value: '', label: 'All types' }, { value: 'residential', label: 'Residential' }, { value: 'mixed', label: 'Mixed-use' }]
 const MIN_PROJECTS = [{ value: '', label: 'Any project count' }, { value: '2', label: '2+ projects' }, { value: '5', label: '5+ projects' }, { value: '10', label: '10+ projects' }]
 const MIN_SALES = [{ value: '', label: 'Any sales %' }, { value: '50', label: 'Sales 50%+' }, { value: '75', label: 'Sales 75%+' }, { value: '90', label: 'Sales 90%+' }]
 
@@ -28,8 +27,9 @@ function Toggle({ id, label, checked, onChange }) {
 }
 
 /** Every option maps to a server-side filter over real values; unknown figures never match. */
-export function DeveloperFilters({ filters, onChange, localities, search, onSearch }) {
+export function DeveloperFilters({ filters, onChange, localities, search, onSearch, cities = [], categories = ['residential', 'mixed'] }) {
   const set = patch => onChange({ ...filters, ...patch })
+  const categoryOptions = [{ value: '', label: 'All types' }, ...categories.map(c => ({ value: c, label: CATEGORY_LABEL[c] || c }))]
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', marginBottom: 14 }}>
       <input
@@ -41,7 +41,10 @@ export function DeveloperFilters({ filters, onChange, localities, search, onSear
         aria-label="Search developer"
         style={{ flex: '1 1 240px', maxWidth: 340, padding: '7px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--line-strong)', background: 'var(--card)', color: 'var(--ink)', fontSize: 13 }}
       />
-      <Segmented options={CATEGORY_OPTIONS} value={filters.category} onChange={v => set({ category: v })} label="Project type" />
+      {cities.length > 1 && (
+        <Segmented options={[{ value: '', label: 'All cities' }, ...cities.map(c => ({ value: c, label: c }))]} value={filters.city || ''} onChange={v => set({ city: v, locality: '' })} label="City" />
+      )}
+      <Segmented options={categoryOptions} value={filters.category} onChange={v => set({ category: v })} label="Project type" />
       <FilterSelect id="f-locality" ariaLabel="Location" value={filters.locality} onChange={v => set({ locality: v })} options={[{ value: '', label: 'All locations' }, ...localities.map(l => ({ value: l, label: l }))]} />
       <FilterSelect id="f-min-projects" ariaLabel="Minimum projects" value={filters.min_projects} onChange={v => set({ min_projects: v })} options={MIN_PROJECTS} />
       <FilterSelect id="f-min-sales" ariaLabel="Minimum sales percentage" value={filters.min_sales_pct} onChange={v => set({ min_sales_pct: v })} options={MIN_SALES} />
@@ -336,7 +339,7 @@ export function LegalTable({ records, showProject = true }) {
   )
 }
 
-const EVENT_TONE = { registration: 'var(--ink-4)', extension: 'var(--amber)', complaint_filed: 'var(--danger)', suo_motu: 'var(--violet)', challan: 'var(--danger)', order: 'var(--ink-2)', completion: 'var(--good)' }
+const EVENT_TONE = { registration: 'var(--ink-4)', extension: 'var(--amber)', complaint_filed: 'var(--danger)', suo_motu: 'var(--violet)', challan: 'var(--danger)', order: 'var(--ink-2)', completion: 'var(--good)', portal_submission: 'var(--accent)', qpr: 'var(--accent)', unit_booking: 'var(--accent)', facilities: 'var(--accent)', engineer_certificate: 'var(--accent)', details_updated: 'var(--ink-3)' }
 
 export function Timeline({ events, showProject = true, limit = 30 }) {
   const [all, setAll] = useState(false)

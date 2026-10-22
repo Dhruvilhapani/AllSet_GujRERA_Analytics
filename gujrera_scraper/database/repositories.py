@@ -13,12 +13,25 @@ from database.db import utcnow
 
 PROJECT_CHILD_TABLES = ["project_locations", "project_developers", "project_professionals", "project_blocks",
                         "project_units", "project_progress", "project_quarters", "project_extensions",
-                        "project_applications", "annual_compliance"]
+                        "project_applications", "annual_compliance", "project_infrastructure", "project_block_fetch",
+                        "project_amenities"]
+# NOT in the list on purpose: project_unit_inventory / project_unit_history / project_form3 are upserted
+# (upsert_units, upsert_form3) so first_seen_at and the change history survive re-parses.
+
+UNIT_COLUMNS = ["project_id", "block_name", "unit_no_norm", "dup_seq", "block_id_src", "unit_no_raw", "unit_kind",
+                "usage_raw", "usage_class", "carpet_area_sqm", "area_excl_balcony_terrace_sqm", "status_source",
+                "status_norm", "agreement_date", "agreement_date_raw", "encumbrance_status", "redeveloped_flag",
+                "source_row_id", "form_three_id", "form3_submitted_on", "is_current", "first_seen_at",
+                "last_seen_at", "last_changed_at"]
+# a change in any of these makes the unit row "changed" (source_row_id / form_three_id change on every Form 3)
+_UNIT_VALUE_COLUMNS = ["usage_raw", "carpet_area_sqm", "area_excl_balcony_terrace_sqm", "status_source",
+                       "agreement_date", "agreement_date_raw", "encumbrance_status", "redeveloped_flag", "unit_no_raw"]
 
 # fields whose changes are logged in project_status_history (incremental change detection)
 TRACKED_PROJECT_FIELDS = ["status_source", "status_derived", "current_completion_date", "extension_count",
                           "latest_progress_pct", "total_units", "booked_units", "unbooked_units",
-                          "completion_filing_status", "reg_no_current", "portal_progress_label"]
+                          "completion_filing_status", "reg_no_current", "portal_progress_label", "portal_last_submitted_at",
+                          "units_form3_submitted_on", "last_qpr_submitted_at", "engineer_cert_submitted_on"]
 
 _columns_cache: dict[str, list[str]] = {}
 
@@ -70,6 +83,77 @@ def replace_project_children(conn: sqlite3.Connection, project_id: int, rows_by_
         conn.execute(f"DELETE FROM {t} WHERE project_id=?", (project_id,))
         if rows_by_table.get(t):
             insert_rows(conn, t, _dedupe(conn, t, rows_by_table[t]))
+
+
+def upsert_units(conn: sqlite3.Connection, project_id: int, units: list[dict], blocks_ok: set[str],
+                 now: str) -> dict[str, int]:
+    """Upsert the unit rows of one project by (block, unit_no_norm, dup_seq) and append change history.
+
+    * first_seen_at survives re-parses; last_changed_at moves only when a value changed.
+    * 'appeared' history rows are written only if the project already had units (an initial backfill is not a
+      change); status / agreement-date changes and disappearances always are.
+    * A unit missing from the latest Form 3 gets is_current=0 (never deleted) - but only for blocks whose unit list
+      was fetched successfully this time, so a failed fetch never makes units "disappear".
+    """
+    existing = {(r["block_name"], r["unit_no_norm"], r["dup_seq"]): r for r in conn.execute(
+        "SELECT * FROM project_unit_inventory WHERE project_id=?", (project_id,))}
+    had_any = bool(existing)
+    stats = {"inserted": 0, "updated": 0, "changed": 0, "disappeared": 0}
+    out_rows, hist = [], []
+
+    def h(change, u, **kw):
+        hist.append((project_id, u["block_name"], u["unit_no_norm"], u["dup_seq"], now, change,
+                     kw.get("status_old"), kw.get("status_new"), kw.get("agr_old"), kw.get("agr_new"),
+                     u.get("form_three_id")))
+
+    seen = set()
+    for u in units:
+        key = (u["block_name"], u["unit_no_norm"], u["dup_seq"])
+        seen.add(key)
+        row = dict(u, project_id=project_id, is_current=1, last_seen_at=now)
+        old = existing.get(key)
+        if old is None or not old["is_current"]:
+            row["first_seen_at"] = old["first_seen_at"] if old else now
+            row["last_changed_at"] = now
+            if old is None:
+                stats["inserted"] += 1
+            if had_any:
+                h("appeared", row, status_new=row["status_source"], agr_new=row["agreement_date"])
+        else:
+            row["first_seen_at"] = old["first_seen_at"]
+            changed = any(old[c] != row.get(c) for c in _UNIT_VALUE_COLUMNS)
+            if old["status_source"] != row["status_source"]:
+                h("status_changed", row, status_old=old["status_source"], status_new=row["status_source"])
+            if old["agreement_date"] != row["agreement_date"]:
+                h("agreement_date_changed", row, agr_old=old["agreement_date"], agr_new=row["agreement_date"])
+            row["last_changed_at"] = now if changed else old["last_changed_at"]
+            stats["changed" if changed else "updated"] += 1
+        out_rows.append([row.get(c) for c in UNIT_COLUMNS])
+    for key, old in existing.items():
+        if key not in seen and old["is_current"] and key[0] in blocks_ok:
+            conn.execute("UPDATE project_unit_inventory SET is_current=0, last_changed_at=? WHERE project_id=? AND "
+                         "block_name=? AND unit_no_norm=? AND dup_seq=?", (now, project_id) + key)
+            h("disappeared", {"block_name": key[0], "unit_no_norm": key[1], "dup_seq": key[2],
+                              "form_three_id": old["form_three_id"]}, status_old=old["status_source"],
+              agr_old=old["agreement_date"])
+            stats["disappeared"] += 1
+    if out_rows:
+        conn.executemany(f"INSERT OR REPLACE INTO project_unit_inventory ({','.join(UNIT_COLUMNS)}) "
+                         f"VALUES ({','.join('?' * len(UNIT_COLUMNS))})", out_rows)
+    if hist:
+        conn.executemany("INSERT INTO project_unit_history(project_id, block_name, unit_no_norm, dup_seq, observed_at, "
+                         "change_type, status_old, status_new, agreement_date_old, agreement_date_new, form_three_id) "
+                         "VALUES (?,?,?,?,?,?,?,?,?,?,?)", hist)
+    return stats
+
+
+def upsert_form3(conn: sqlite3.Connection, header: dict, now: str) -> None:
+    old = conn.execute("SELECT first_seen_at FROM project_form3 WHERE project_id=? AND form_three_id=?",
+                       (header["project_id"], header["form_three_id"])).fetchone()
+    row = dict(header, first_seen_at=old["first_seen_at"] if old and old["first_seen_at"] else now, last_seen_at=now)
+    conn.execute("UPDATE project_form3 SET is_latest=0 WHERE project_id=? AND form_three_id!=?",
+                 (header["project_id"], header["form_three_id"]))
+    insert_rows(conn, "project_form3", [row])
 
 
 def _dedupe(conn, table: str, rows: list[dict]) -> list[dict]:

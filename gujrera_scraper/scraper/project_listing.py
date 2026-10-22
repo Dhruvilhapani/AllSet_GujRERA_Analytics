@@ -7,10 +7,25 @@ from __future__ import annotations
 
 from collections import Counter
 
-from scraper.endpoints import UNIVERSE
+from scraper.endpoints import TYPE_LABEL, UNIVERSE
 from scraper.network_client import GujReraClient
 
-TYPE_LABEL = {"list_residential": "Residential/Group Housing", "list_mixed": "Mixed Development"}
+
+def in_scope(row: dict, key: str, settings: dict) -> bool:
+    """True when a list row belongs to the crawl scope. Types listed in `district_scoped_types` are limited to
+    `target_districts` (case-insensitive: the source has spelling variants such as 'AHmedabad'); the legacy
+    all-Gujarat types are kept whole."""
+    scoped = settings.get("district_scoped_types") or []
+    if key not in scoped:
+        return True
+    wanted = {d.strip().lower() for d in settings.get("target_districts") or []}
+    return not wanted or (row.get("districtName") or "").strip().lower() in wanted
+
+
+def in_unit_scope(row: dict, settings: dict) -> bool:
+    """True when the unit layer (block names, Form 3, per-block unit lists) is crawled for this list row."""
+    wanted = {d.strip().lower() for d in (settings.get("units") or {}).get("districts") or []}
+    return (row.get("districtName") or "").strip().lower() in wanted
 
 
 def fetch_list(client: GujReraClient, key: str) -> list[dict]:

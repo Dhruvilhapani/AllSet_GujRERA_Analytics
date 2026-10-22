@@ -14,7 +14,8 @@ webapp/frontend/dist/
 *.out
 *.lock
 
-# Data: ignore everything except the published 4,520-project app snapshot.
+# Data: ignore everything except the published app snapshots. gujrera_ahmedabad_gandhinagar.db is the ONE database with
+# all app data, including the unit-wise booking rows (table unit_inventory).
 # Raw crawl databases are large (>100 MiB) and contain personal contact data; regenerate with `cli.py crawl`.
 gujrera_scraper/data/*
 !gujrera_scraper/data/app/
