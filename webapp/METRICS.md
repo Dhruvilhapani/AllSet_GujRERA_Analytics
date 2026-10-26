@@ -1,7 +1,7 @@
 # Metric definitions
 
 Every number in the web app is computed on the server in `webapp/server/analytics.py` (pandas / NumPy) from the
-published snapshot (`gujrera_scraper/data/app/gujrera_ahmedabad_gandhinagar.db`, or the older `gujrera_ahmedabad.db`). The frontend only displays the results.
+published snapshot (`gujrera_scraper/data/app/gujrera_ahmedabad_gandhinagar.db`, or the old Ahmedabad-only `Gujrara_old_data_15_10_26.db`). The frontend only displays the results.
 `webapp/tests/test_analytics.py` pins each rule below, and `webapp/qa/validate_metrics.py` recomputes the main
 metrics independently and compares them with the API.
 
