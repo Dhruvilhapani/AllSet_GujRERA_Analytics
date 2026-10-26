@@ -11,7 +11,14 @@ parser for the public GujRERA portal, developer and project analytics, and an Ah
 
 ## Data included in this repository
 
-`gujrera_scraper/data/app/gujrera_ahmedabad.db` (SQLite, ~10 MB) is the published app snapshot the web app reads:
+The web app reads one of two app snapshots in `gujrera_scraper/data/app/`:
+
+- **`gujrera_ahmedabad_gandhinagar.db`** (SQLite, ~240 MB, **not in git**): the current database. Ahmedabad + Gandhinagar,
+  Residential / Mixed / Commercial / Plotted, 7,178 projects, unit-wise booking rows, generated 2026-10-22. It is over
+  GitHub's 100 MB file limit, so get it from the shared link (or rebuild it with `run\run_scrape_all.ps1`) and place it
+  in that folder. The web app uses it whenever it is present.
+- **`Gujrara_old_data_15_10_26.db`** (SQLite, ~10 MB, tracked in git; formerly `gujrera_ahmedabad.db`): the old Ahmedabad-only
+  snapshot, used as a fallback so a fresh clone still runs:
 
 - **4,520 projects** in Ahmedabad district (2,260 Residential/Group Housing + 2,260 Mixed Development); this snapshot
   pre-dates the Commercial / Plotted / Gandhinagar / unit-wise data, which the app supports as soon as the crawl has
@@ -34,7 +41,7 @@ agreement) for Ahmedabad and Gandhinagar, across Residential, Mixed, Commercial 
 from the source: only the latest filing is published (no booking history), balcony and terrace areas are one figure,
 there is no per-unit floor (floors and lifts per block come from Form 1), and amounts / buyer details are not public and are never stored. Amenities come from Form 1 (common facilities with status and progress, plus any facility the promoter names, such as a club house); GujRERA has no other amenity list.
 
-All app data, including the unit-wise booking rows (table `unit_inventory`), is in ONE database: `gujrera_scraper/data/app/gujrera_ahmedabad_gandhinagar.db`, which is tracked in git (see `.gitignore`). Commands and rules:
+All app data, including the unit-wise booking rows (table `unit_inventory`), is in ONE database: `gujrera_scraper/data/app/gujrera_ahmedabad_gandhinagar.db`. It is git-ignored (over GitHub's 100 MB limit; see *Data included in this repository*). Commands and rules:
 [gujrera_scraper/docs/scraping_strategy.md](gujrera_scraper/docs/scraping_strategy.md) and
 [data_dictionary.md](gujrera_scraper/docs/data_dictionary.md).
 
@@ -60,8 +67,8 @@ cd webapp/frontend && npm install && npm run build && cd ../..
 .venv/bin/python -m uvicorn webapp.server.app:app --host 127.0.0.1 --port 8600   # Windows: .venv\Scripts\python.exe
 ```
 
-The server reads `gujrera_scraper/data/app/gujrera_ahmedabad.db` by default; set `RERA_APP_DB` to use another
-snapshot. Crawling and refreshing the data are described in [webapp/README.md](webapp/README.md) and
+The server reads `gujrera_scraper/data/app/gujrera_ahmedabad_gandhinagar.db` when it exists, otherwise
+`Gujrara_old_data_15_10_26.db`; set `RERA_APP_DB` to use another snapshot. Crawling and refreshing the data are described in [webapp/README.md](webapp/README.md) and
 [gujrera_scraper/README.md](gujrera_scraper/README.md).
 
 ## Tests

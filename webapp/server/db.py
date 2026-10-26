@@ -17,8 +17,9 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 APP_DIR = PROJECT_ROOT / "gujrera_scraper" / "data" / "app"
-# newest layout first: a merged multi-city snapshot wins over the original single-district file
-DEFAULT_CANDIDATES = (APP_DIR / "gujrera_ahmedabad_gandhinagar.db", APP_DIR / "gujrera_ahmedabad.db")
+# newest layout first: the merged multi-city snapshot (git-ignored, shared separately) wins over the old
+# Ahmedabad-only snapshot that is tracked in git (formerly gujrera_ahmedabad.db)
+DEFAULT_CANDIDATES = (APP_DIR / "gujrera_ahmedabad_gandhinagar.db", APP_DIR / "Gujrara_old_data_15_10_26.db")
 DEFAULT_SNAPSHOT = DEFAULT_CANDIDATES[-1]
 
 CATEGORIES = ("residential", "mixed", "commercial", "plotted")

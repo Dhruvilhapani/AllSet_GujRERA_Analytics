@@ -14,13 +14,14 @@ webapp/frontend/dist/
 *.out
 *.lock
 
-# Data: ignore everything except the published app snapshots. gujrera_ahmedabad_gandhinagar.db is the ONE database with
-# all app data, including the unit-wise booking rows (table unit_inventory).
+# Data: ignore everything except the old Ahmedabad-only app snapshot (Gujrara_old_data_15_10_26.db, the web app's
+# fallback). gujrera_ahmedabad_gandhinagar.db is the ONE database with all app data, including the unit-wise booking
+# rows (table unit_inventory), but at ~240 MB it is over GitHub's 100 MB file limit: it is ignored and shared separately.
 # Raw crawl databases are large (>100 MiB) and contain personal contact data; regenerate with `cli.py crawl`.
 gujrera_scraper/data/*
 !gujrera_scraper/data/app/
 gujrera_scraper/data/app/*
-!gujrera_scraper/data/app/gujrera_ahmedabad.db
+!gujrera_scraper/data/app/Gujrara_old_data_15_10_26.db
 
 # SQLite sidecar files anywhere
 *.db-wal
