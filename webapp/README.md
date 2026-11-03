@@ -3,7 +3,7 @@
 Dashboard + Developers section over the GujRERA data collected by `../gujrera_scraper`.
 
 ```
-gujrera_scraper  --crawl-->  data/gujrera.db  --refresh-app-->  data/app/gujrera_ahmedabad.db  --read-->  webapp
+gujrera_scraper  --crawl-->  data/gujrera.db  --refresh-app-->  data/app/gujrera_ahmedabad_gandhinagar.db  --read-->  webapp
 ```
 
 ## Run
@@ -42,7 +42,7 @@ cd ..
 Frontend development with hot reload: `npm run dev` in `webapp/frontend` (http://localhost:5180, proxies `/api` to :8600).
 
 `RERA_APP_DB` overrides the snapshot path (default: `gujrera_scraper/data/app/gujrera_ahmedabad_gandhinagar.db` when it
-exists, otherwise `gujrera_ahmedabad.db`). That one file holds everything, including the unit-wise booking rows (table
+exists, otherwise the old Ahmedabad-only `Gujrara_old_data_15_10_26.db` tracked in git). That one file holds everything, including the unit-wise booking rows (table
 `unit_inventory`); on an older snapshot without that table the app works and the Blocks & units tab says the data is not
 part of the build.
 Snapshots published before the multi-city layout keep working (`city` falls back to the district).
@@ -101,7 +101,7 @@ cd webapp\frontend; npm run lint; npm run build                              # f
 Offline metric QA (independent recomputation vs the API, plus Matplotlib plots in `webapp/qa/out/`):
 
 ```powershell
-.\.venv\Scripts\python.exe webapp\qa\validate_metrics.py --snapshot gujrera_scraper\data\app\gujrera_ahmedabad.db --pipeline-db gujrera_scraper\data\snapshot_app.db
+.\.venv\Scripts\python.exe webapp\qa\validate_metrics.py --snapshot gujrera_scraper\data\app\gujrera_ahmedabad_gandhinagar.db --pipeline-db gujrera_scraper\data\snapshot_app.db
 ```
 
 Exit code 1 lists every mismatch. Matplotlib is a QA-only dependency; the server never imports it.
